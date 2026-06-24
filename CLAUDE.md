@@ -37,7 +37,12 @@ Build order decided: Bank Tracker v0 → ships → apply for SE Werkstudent role
 
 Never run terminal commands on my behalf. Write the command, explain what it does in one line,
 then stop and wait for me to run it and report back.
-Exception: read-only inspection commands (`ls`, `cat`, `find`, `grep`) are fine.
+Exception: read-only inspection commands (`ls`, `cat`, `find`, `grep`, `git status`, `git log`) are always fine to run without asking.
+
+### Pace
+
+When I say "it's done" or "done", that means I already created the file/folder myself.
+Don't re-explain what was just done — verify with a quick read-only command if needed, then move to the next step immediately.
 
 ### I am here to learn, not to watch you build
 
