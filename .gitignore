@@ -3,6 +3,7 @@
 # -----------------------------------
 backend/.env
 frontend/.env
+.cert/
 
 # -----------------------------------
 # Banking data — never committed
