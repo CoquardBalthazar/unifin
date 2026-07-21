@@ -99,7 +99,7 @@ Build order: Phase 1 → 2 → 3 → 4 → 5 → 6 → 7.
 ## Project structure (target)
 
 ```
-bank-tracker/
+unifin/
 ├── backend/
 │   ├── src/
 │   │   ├── routes/         # URL + method → controller mapping

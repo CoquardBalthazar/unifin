@@ -25,9 +25,11 @@ services:
       DATABASE_URL: postgres://unifin:unifin@postgres:5432/unifin
     env_file:
       - ./backend/.env
+      - ./backend/.env
     depends_on:
       postgres:
         condition: service_healthy
 
 volumes:
   postgres_data:
+

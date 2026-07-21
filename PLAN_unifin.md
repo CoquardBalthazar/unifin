@@ -1,6 +1,6 @@
 # Unifin — Bank Tracker · Development Plan
 
-> Working document. Living plan for `bank-tracker` (Unifin).
+> Working document. Living plan for `unifin` (Unifin).
 > Created: 2026-06-22. Last updated: 2026-06-24.
 
 ---
@@ -15,7 +15,7 @@ Unifin is the **second rung of a 3-project learning ladder**:
 | **Unifin** (this repo) | Step up. Same frontend + first real backend: Express + PostgreSQL + JWT + Docker. Personal use → solo auth. | React + Vite + TS + Node/Express + PostgreSQL + Docker |
 | **CREA** | Main project. Multi-user, groups, chat, AI coach. Forks this repo's skeleton. | Full-stack (same, + realtime) |
 
-**Build order:** Bank Tracker v0 → ships → (apply for SE Werkstudent roles) → extract `fullstack-starter` GitHub template → CREA v0 → continue applying with stronger profile.
+**Build order:** Bank Tracker v0 → ships → (apply for SE Werkstudent roles) → CREA v0 (rewired manually from what was learned here, no automated template extraction) → continue applying with stronger profile.
 
 Unifin is **not** the portfolio centrepiece — CREA is. Unifin is a working personal tool that also produces a battle-tested skeleton for CREA.
 
@@ -77,7 +77,7 @@ FOOD & Households, HOUSING rent, TRANSPORT, HOBBIES, HEALTH, TRIPS, SAVINGS, STU
 ## 4. Repo structure (target)
 
 ```
-bank-tracker/
+unifin/
 ├── backend/
 │   ├── src/
 │   │   ├── routes/         # URL + method → controller
@@ -119,23 +119,62 @@ bank-tracker/
 
 ## 5. Phased plan
 
-### Phase 1 — Skeleton
-*The boring 60% that CREA inherits. Build it right once.*
+Each phase is tagged with the layer(s) it touches, the tech stack in play, and a rough time estimate. Commands are run by hand (per project conventions) — no assistant-driven scaffolding.
 
-- [ ] Create repo `bank-tracker` on GitHub (start private, make public once gitignore confirmed)
+### Phase 1 — React fundamentals sprint
+**Layer:** Frontend · **Stack:** React, Vite, TypeScript, React Router, Vitest, React Testing Library · **Estimate:** 1 day
+
+*Not a throwaway tutorial — this builds unifin's real frontend shell in place.*
+
+- [ ] `npm create vite@latest` (React + TS) — run and confirmed by you, inside the real `frontend/` folder from the repo structure (section 4), not a separate practice folder
+- [ ] Skim React docs "Describing the UI" + "Adding Interactivity" — scan headers only: `useState`, `useEffect`, props/children
+- [ ] Build the 3-component skeleton:
+  - [ ] `<TransactionList>` — props, list rendering, `key` management
+  - [ ] `<TransactionForm>` — controlled inputs, `useState`
+  - [ ] `<Dashboard>` — composes both, lifts state up
+- [ ] `useTransactions()` custom hook — stub returning mock data (placeholder for the real API call in Phase 5)
+- [ ] React Router: `/`, `/transactions`, `/login` (empty page, wired up in Phase 2) — this is unifin's real route structure
+- [ ] Vitest + React Testing Library: 3–4 tests — renders list, form submit updates state, routing navigates. Pattern over coverage.
+
+**Learning outcome:** components, props vs state, custom hooks, routing, render → interact → assert testing pattern.
+
+### Phase 2 — Express backend + auth sprint
+**Layer:** Backend · **Stack:** Node, Express, TypeScript, ts-node-dev, PostgreSQL, JWT, bcrypt, Supertest, Vitest · **Estimate:** 1 day (weekend)
+
+*Same principle — real `backend/` folder, not a throwaway API.*
+
+- [ ] `npm init`, Express + TypeScript, `ts-node-dev` — inside `backend/`
+- [ ] Skim Express routing guide — 10 min, no more
+- [ ] REST endpoints against Postgres: `GET/POST /api/transactions`, `GET /api/transactions/:id`
+- [ ] DB access via **Knex** (locked in section 2 — not Prisma; keep the ORM choice consistent from the first line of code so nothing needs porting later)
+- [ ] Supertest + Vitest: one test per route (200 valid, 400/404 bad input)
+- [ ] Auth exercise — the one place to follow a focused guide, since JWT has easy-to-miss security details:
+  - [ ] `POST /api/auth/login` (bcrypt hash check, JWT issue) — single hardcoded user from `backend/.env`, no registration endpoint (per section 2)
+  - [ ] Middleware protecting `/api/transactions` routes
+  - [ ] Frontend: login form → store token → attach to fetch calls → redirect on 401 (wires into the `/login` route from Phase 1)
+
+**Learning outcome:** Express routing, Knex query basics, JWT auth end-to-end, protected routes, wiring frontend auth to a real API.
+
+### Phase 3 — Skeleton hardening
+**Layer:** Full-stack · **Stack:** Docker Compose, Knex migrations, GitHub Actions · **Estimate:** half day
+
+*Wraps Phases 1–2 into the repo's real infrastructure — this is the CREA skeleton.*
+
+- [ ] Create repo `unifin` on GitHub (start private, make public once gitignore confirmed)
 - [ ] `.gitignore` — first thing written: `data/real/`, `backend/.env`, `frontend/.env`, `CLAUDE.local.md`
 - [ ] `docker-compose.yml` — two services: `app` (Node) + `postgres`
-- [ ] Backend: `npm init`, Express + TypeScript, `ts-node-dev`, `GET /health` route
 - [ ] Knex setup: `knex.ts` config, first migration (`accounts` table), `npm run migrate`
-- [ ] JWT auth: `POST /auth/login` (credentials from `backend/.env`), `POST /auth/me`, auth middleware
-- [ ] Frontend: `npm create vite@latest` (React + TS), Tailwind setup, proxy → backend
-- [ ] React auth shell: LoginPage, auth context, `useAuth` hook, protected route wrapper
+- [ ] `GET /health` route, confirmed reachable through Docker
+- [ ] Tailwind setup on the frontend, proxy → backend
+- [ ] Auth context / `useAuth` hook, protected route wrapper (formalizes the Phase 2 login flow)
 - [ ] GitHub Actions CI: lint + build on push
 - [ ] Confirm full loop: login → protected page → `GET /health` with token → 200
 
-**Learning outcome:** Docker Compose, Express + TS, Knex migrations, JWT end-to-end, React auth context, Tailwind. This is the CREA skeleton.
+**Learning outcome:** Docker Compose, Knex migrations end-to-end, CI basics — the parts CREA will fork.
 
-### Phase 2 — Database schema + ETL
+### Phase 4 — Database schema + ETL
+**Layer:** Backend · **Stack:** Knex migrations, PostgreSQL, Python (existing ETL) · **Estimate:** half day
+
 *Migrations for the remaining tables. Python ETL writes to Postgres.*
 
 - [ ] Migrations: `transactions`, `categories`, `category_rules`
@@ -146,7 +185,9 @@ bank-tracker/
 
 **Learning outcome:** full Knex migration workflow, seeding, Python writing directly to Postgres.
 
-### Phase 3 — Transactions UI
+### Phase 5 — Transactions UI
+**Layer:** Full-stack · **Stack:** Express (PATCH routes), Knex, React (controlled inputs) · **Estimate:** 1 day
+
 *The core editing loop — this is where the app becomes useful.*
 
 - [ ] `GET /transactions` — paginated, filterable by account / date range / flow / category
@@ -158,7 +199,9 @@ bank-tracker/
 
 **Learning outcome:** PATCH endpoints, controlled React inputs, optimistic UI updates.
 
-### Phase 4 — Overview
+### Phase 6 — Overview
+**Layer:** Full-stack · **Stack:** Knex/SQL aggregation, React · **Estimate:** half day
+
 *The yearly dashboard. Pure SQL + simple React.*
 
 - [ ] `GET /overview?year=YYYY` → `{ category, type, total }[]` grouped by category
@@ -169,7 +212,9 @@ bank-tracker/
 
 **Learning outcome:** SQL aggregation via Knex, derived data in React without extra state.
 
-### Phase 5 — Mobile + file import from UI
+### Phase 7 — Mobile + file import from UI
+**Layer:** Full-stack · **Stack:** Express (multer, child_process), React (responsive Tailwind) · **Estimate:** 1 day
+
 *Makes the app actually usable on the phone during downtime.*
 
 - [ ] `POST /import` endpoint: file upload (multer), Node spawns Python `db_insert.py` via `child_process`
@@ -181,24 +226,19 @@ bank-tracker/
 
 **Learning outcome:** file upload in Express, `child_process` Python interop, responsive Tailwind layout.
 
-### Phase 6 — CI/CD + deploy
-*Ship it. Same pipeline CREA will use.*
+### Phase 8 — CI/CD + deploy
+**Layer:** Full-stack / DevOps · **Stack:** GitHub Actions, Docker, Railway, Vercel · **Estimate:** half day
+
+*Ship it. Same pipeline CREA will use — but CREA is rewired by hand from what's learned here, not extracted as an automated template.*
 
 - [ ] GitHub Actions: lint → test (sample data) → Docker build → deploy to Railway
 - [ ] PostgreSQL on Railway
 - [ ] Frontend on Vercel — connect repo, set `VITE_API_URL`
 - [ ] All secrets in Railway + Vercel dashboards — never in repo
 - [ ] Smoke test on production: import sample → categorize → overview
+- [ ] Tag `v1.0.0`
 
 **Learning outcome:** full CI/CD, environment management across two platforms.
-
-### Phase 7 — Template extraction (bridge to CREA)
-*The handoff.*
-
-- [ ] Tag `v1.0.0`
-- [ ] Create `fullstack-starter` private repo: strip ETL, transactions routes, categories — keep auth, Docker, CI/CD, Express scaffold, React shell, Knex, Tailwind
-- [ ] Mark as GitHub Template Repository
-- [ ] CREA starts from "Use this template"
 
 ---
 
@@ -240,8 +280,7 @@ bank-tracker/
 
 ## 9. Remaining work (as of 2026-06-24)
 
-1. Create repo `bank-tracker` on GitHub
-2. Write `.gitignore` first — `data/real/`, `backend/.env`, `frontend/.env`, `CLAUDE.local.md`
-3. Create synthetic sample fixtures (`data/sample/sample_bp.tsv`, `data/sample/sample_c24.csv`)
-4. Answer the one remaining open question: Python ETL called via `child_process` from Phase 5 — confirm that's the plan (yes)
-5. Start Phase 1
+1. Start Phase 1 — React fundamentals sprint (`npm create vite@latest` inside `frontend/`)
+2. Create repo `unifin` on GitHub (can happen alongside Phase 1/2, formalized in Phase 3)
+3. Create synthetic sample fixtures (`data/sample/sample_bp.tsv`, `data/sample/sample_c24.csv`) — needed by Phase 4
+4. Python ETL called via `child_process` — confirmed, lands in Phase 7
