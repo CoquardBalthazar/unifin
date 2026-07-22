@@ -1,0 +1,45 @@
+/* Unifin — design tokens
+   Palette derived from the sunrise reference: black/beige base,
+   cobalt + orange highlights, green/red semantic pairs for dashboards.
+   Import once, e.g. in main.tsx: import './styles/tokens.css'
+*/
+
+:root {
+  /* --- Neutral base (use for most surfaces) --- */
+  --color-bg: #f0e7d3; /* page background · beige */
+  --color-surface: #fbf6ec; /* cards, panels · off-white */
+  --color-surface-alt: #fdfbf4;
+  --color-ink: #17130e; /* primary text · near-black */
+  --color-white: #ffffff;
+  --color-border: #e1d5bc;
+
+  /* --- Strong highlights --- */
+  --color-primary: #1a3aa0; /* cobalt · primary actions */
+  --color-primary-hover: #12297a;
+  --color-secondary: #e07c2a; /* sun orange · tags, icons, fills (NOT small text) */
+  --color-secondary-hover: #c4661a;
+  --color-accent: #f2b705; /* gold · sparing accent */
+  --color-accent-hover: #d8a203;
+
+  /* --- Dashboard: income (green) --- */
+  --income-solid: #3f7a2a;
+  --income-solid-hover: #316021;
+  --income-soft: #e6efda; /* soft row/chip fill */
+  --income-text: #2c5518; /* text on income-soft */
+
+  /* --- Dashboard: expense (red) --- */
+  --expense-solid: #b23a2c;
+  --expense-solid-hover: #8f2c20;
+  --expense-soft: #f6e2dc; /* soft row/chip fill */
+  --expense-text: #79241a; /* text on expense-soft */
+
+  /* --- Punchier variants (swap in if the muted greens/reds feel weak) ---
+     --income-solid: #2E8B1F;
+     --expense-solid: #C9372A;
+  */
+
+  /* --- Shared tokens --- */
+  --radius: 8px;
+  --radius-card: 12px;
+  --radius-shell: 16px;
+}
