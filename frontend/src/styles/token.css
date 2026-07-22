@@ -3,7 +3,6 @@
    cobalt + orange highlights, green/red semantic pairs for dashboards.
    Import once, e.g. in main.tsx: import './styles/tokens.css'
 */
-
 :root {
   /* --- Neutral base (use for most surfaces) --- */
   --color-bg: #f0e7d3; /* page background · beige */
