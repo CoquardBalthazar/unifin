@@ -1,0 +1,77 @@
+/* Unifin — typography tokens
+   Inter (18pt optical size) for body/UI, Fraunces for headings/display moments.
+   Self-hosted static .ttf files — one @font-face per weight actually used.
+   Sizes/weights are composed at the call site with Tailwind's built-in scale
+   (text-sm, text-2xl, font-medium, ...) — no custom text-style classes here.
+*/
+
+/* Tailwind native style using @font-face */
+@font-face {
+  font-family: "Inter";
+  src: url("../../assets/fonts/Inter/static/Inter_18pt-Regular.ttf")
+    format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("../../assets/fonts/Inter/static/Inter_18pt-Medium.ttf")
+    format("truetype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("../../assets/fonts/Inter/static/Inter_18pt-SemiBold.ttf")
+    format("truetype");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("../../assets/fonts/Inter/static/Inter_18pt-Bold.ttf")
+    format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Fraunces";
+  src: url("../../assets/fonts/Fraunces/static/Fraunces_72pt-Regular.ttf")
+    format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Fraunces";
+  src: url("../../assets/fonts/Fraunces/static/Fraunces_72pt-SemiBold.ttf")
+    format("truetype");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Fraunces";
+  src: url("../../assets/fonts/Fraunces/static/Fraunces_72pt-Bold.ttf")
+    format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@theme {
+  /* font-sans → default body/UI text; font-serif → headings, hero numbers, display moments */
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Fraunces", ui-serif, serif;
+}
+
+/* App-wide default: body text uses Inter unless a component opts into font-serif */
+body {
+  font-family: var(--font-sans);
+  color: var(--color-ink);
+}

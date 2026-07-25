@@ -1,9 +1,9 @@
 /* Unifin — design tokens
    Palette derived from the sunrise reference: black/beige base,
    cobalt + orange highlights, green/red semantic pairs for dashboards.
-   Import once, e.g. in main.tsx: import './styles/tokens.css'
+   Declared inside @theme so Tailwind generates utilities (bg-primary, text-ink, ...).
 */
-:root {
+@theme {
   /* --- Neutral base (use for most surfaces) --- */
   --color-bg: #f0e7d3; /* page background · beige */
   --color-surface: #fbf6ec; /* cards, panels · off-white */
@@ -21,24 +21,24 @@
   --color-accent-hover: #d8a203;
 
   /* --- Dashboard: income (green) --- */
-  --income-solid: #3f7a2a;
-  --income-solid-hover: #316021;
-  --income-soft: #e6efda; /* soft row/chip fill */
-  --income-text: #2c5518; /* text on income-soft */
+  --color-income: #3f7a2a;
+  --color-income-hover: #316021;
+  --color-income-soft: #e6efda; /* soft row/chip fill */
+  --color-income-text: #2c5518; /* text on income-soft */
 
   /* --- Dashboard: expense (red) --- */
-  --expense-solid: #b23a2c;
-  --expense-solid-hover: #8f2c20;
-  --expense-soft: #f6e2dc; /* soft row/chip fill */
-  --expense-text: #79241a; /* text on expense-soft */
+  --color-expense: #b23a2c;
+  --color-expense-hover: #8f2c20;
+  --color-expense-soft: #f6e2dc; /* soft row/chip fill */
+  --color-expense-text: #79241a; /* text on expense-soft */
 
   /* --- Punchier variants (swap in if the muted greens/reds feel weak) ---
-     --income-solid: #2E8B1F;
-     --expense-solid: #C9372A;
+     --color-income: #2E8B1F;
+     --color-expense: #C9372A;
   */
 
   /* --- Shared tokens --- */
-  --radius: 8px;
+  --radius-DEFAULT: 8px;
   --radius-card: 12px;
   --radius-shell: 16px;
 }
