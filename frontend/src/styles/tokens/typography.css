@@ -6,6 +6,7 @@
 */
 
 /* Tailwind native style using @font-face */
+/* TW : (font-normal=400, font-medium=500, font-semibold=600, font-bold=700, etc.) */
 @font-face {
   font-family: "Inter";
   src: url("../../assets/fonts/Inter/static/Inter_18pt-Regular.ttf")
