@@ -3,13 +3,14 @@ import { TransactionItem } from "./TransactionItem";
 
 type Props = {
   transactions: Transaction[];
+  onDelete: (id: string) => void;
 };
 
-export function TransactionList({ transactions }: Props) {
+export function TransactionList({ transactions, onDelete }: Props) {
   return (
     <ul className="transaction-list">
       {transactions.map((t) => (
-        <TransactionItem key={t.id} transaction={t} />
+        <TransactionItem key={t.id} transaction={t} onDelete={onDelete} />
       ))}
     </ul>
   );

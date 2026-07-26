@@ -3,8 +3,6 @@ import type { Transaction } from "../../types/types";
 import { TransactionList } from "./TransactionList";
 import { fetchTransactions } from "../../api/transactions";
 
-import { MOCK } from "../../api/transactions";
-
 export function TransactionPage() {
   // useState
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -37,6 +35,11 @@ export function TransactionPage() {
     }; // cleanup
   }, []); // no dependencies
 
+  //   Callback passed down to children
+  function handleDelete(id: string) {
+    setTransactions((current) => current.filter((t) => t.id !== id));
+  }
+
   //   Conditional rendering : early returns
   // Handle isLoading vs error
   if (isLoading) {
@@ -49,7 +52,10 @@ export function TransactionPage() {
   return (
     <main>
       <h1>Unifin - Transaction</h1>
-      <TransactionList transactions={MOCK}></TransactionList>
+      <TransactionList
+        transactions={transactions}
+        onDelete={handleDelete}
+      ></TransactionList>
     </main>
   );
 }
