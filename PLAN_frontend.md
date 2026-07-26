@@ -39,7 +39,7 @@ One rule to notice as you read: **only `TransactionsPage` owns state.** Everythi
 
 ---
 
-### `src/types.ts`
+### `src/types.ts`/
 
 ```ts
 export type Transaction = {

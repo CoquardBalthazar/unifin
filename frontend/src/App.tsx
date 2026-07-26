@@ -1,13 +1,14 @@
 import "./App.css";
 
+import { TransactionPage } from "./features/transactions/TransactionPage";
+
 function App() {
   return (
     <>
       <div>
-        <h1>Get started</h1>
-        <p>
-          Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-        </p>
+        <h1>Unifin</h1>
+        <p>See below the list of transactions</p>
+        <TransactionPage />
       </div>
     </>
   );
