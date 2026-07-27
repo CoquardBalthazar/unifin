@@ -13,16 +13,23 @@ import {
 
 export function SummaryChart() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   //  Load recent transaction
   useEffect(() => {
     let ignore = false;
 
-    fetchTransactions().then((data) => {
-      if (!ignore) {
-        setTransactions(data);
-      }
-    });
+    fetchTransactions()
+      .then((data) => {
+        if (!ignore) {
+          setTransactions(data);
+        }
+      })
+      .catch(() => {
+        if (!ignore) {
+          setError("Could not load transactions");
+        }
+      });
     return () => {
       ignore = true;
     }; // cleanup

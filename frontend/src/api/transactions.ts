@@ -34,11 +34,7 @@ export const MOCK = [
 export function fetchTransactions(): Promise<Transaction[]> {
   return new Promise((resolve, reject) => {
     setTimeout(() => {
-      if (Math.random() < 0.2) {
-        reject(new Error("Failed to fetch transactions"));
-      } else {
-        resolve(MOCK);
-      }
+      resolve(MOCK);
     }, 800);
   });
 }

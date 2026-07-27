@@ -398,7 +398,13 @@ describe("DashboardPage", () => {
 });
 ```
 
-Note the last test is intentionally left open-ended — asserting "did navigation happen" inside a bare `MemoryRouter` (no `<Routes>` around it) needs either a full `<Routes>` test harness or mocking `useNavigate` itself; work out which approach once you're there, it's a good exercise.
+**Resolved:** asserting "did navigation happen" needed a real `<Routes>` tree (not a bare `MemoryRouter`) — wrap `DashboardPage` in `<Routes><Route path="/" element={<DashboardPage />} /><Route path="/transactions" element={<h1>Transactions</h1>} /></Routes>`, click "See all", then assert the dummy `/transactions` heading rendered. A bare `MemoryRouter` has nowhere to navigate *to*, so `useNavigate()` changing the in-memory history has no visible effect without a matching `<Route>`.
+
+**Step 4b status: done.** All components now have tests — `NavBar`, `RecentTransactions`, `SummaryChart`, `DashboardPage`, `TransactionPage` (9 test files, 24 tests total, all passing).
+
+Two things the test-writing surfaced, not yet fixed in the components themselves:
+- `RecentTransactions.tsx` sets an `error` state on fetch rejection but never renders it — falls through to the "no transactions" empty state instead. `TransactionPage.tsx` handles this correctly (`if (error) return <p className="error">{error}</p>;`); `RecentTransactions` should do the same.
+- `SummaryBar.tsx` still has the dead `totalIncome` function referencing a nonexistent `Transactions` type (flagged in Step 4, not fixed).
 
 ---
 
@@ -459,7 +465,17 @@ Run via `npx cypress run` (headless, CI-friendly) or `npx cypress open` (interac
 
 ---
 
-**Learning outcome:** the RTL vs Cypress split — RTL for fast, isolated component behavior (runs in every CI push, no browser needed); Cypress for real user-facing flows across the whole app (slower, browser-based, run less often or pre-merge). This is the same split CREA will use.
+**Step 5/6 status: done, as of 2026-07-27.** Cypress installed and `frontend/cypress/e2e/navigation.cy.ts` written and passing, with a `cy.go("back")` test added beyond the original plan (real browser back/forward — something RTL can't test at all). Bugs the process surfaced and fixed along the way:
+
+- `NavBar`'s "Transactions"/"Home" are `<NavLink>` (renders as `<a>`), not `<button>` — `cy.contains("button", ...)` silently never matches; must use `cy.contains("a", ...)` or drop the tag constraint.
+- `.should("include", /regex/)` doesn't work — Chai's `include` assertion expects a **string**, not a regex, for substring checks. Use `.should("include", "/transactions")` (string) or `.should("match", /transactions/i)` (regex) — two different assertion verbs, not interchangeable.
+- Real bug in `SummaryChart.tsx`: its `fetchTransactions().then(...)` had no `.catch()`, unlike `RecentTransactions`/`TransactionPage`. Combined with the mock API's original 20% random rejection, this surfaced as an **unhandled promise rejection** that Cypress treats as an automatic test failure (uncaught app errors always fail the current test, by design). Fixed by adding the missing `.catch()`.
+- Root-caused further: that 20% random rejection in `api/transactions.ts` (originally added just to eyeball the loading/error UI once by hand) had no business being in code exercised by automated tests — removed it entirely. Deterministic mocks over "realistic" flaky ones; the actual error-path UI is still covered deliberately in Vitest via `mockRejectedValue`.
+- Needed a dedicated `cypress/tsconfig.json` (scoped to `cypress/**/*.ts`, `types: ["cypress", "node"]`) since the project uses TS project references (`tsconfig.app.json` only `include`s `src`, `tsconfig.node.json` only the Vite config) — neither covered the `cypress/` folder, so `cy.*` types needed their own config rather than being bolted onto an existing one.
+
+**Learning outcome:** the RTL vs Cypress split — RTL for fast, isolated component behavior (runs in every CI push, no browser needed); Cypress for real user-facing flows across the whole app (slower, browser-based, run less often or pre-merge), and the *only* layer that can test real browser history (`cy.go("back")`), a real address bar, and uncaught runtime errors. This is the same split CREA will use.
+
+**Phase 1b complete.** Next: Phase 2 — Express backend + auth sprint.
 
 ### Phase 2 — Express backend + auth sprint
 **Layer:** Backend · **Stack:** Node, Express, TypeScript, ts-node-dev, PostgreSQL, JWT, bcrypt, Supertest, Vitest · **Estimate:** 1 day (weekend)
