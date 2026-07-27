@@ -138,6 +138,175 @@ Each phase is tagged with the layer(s) it touches, the tech stack in play, and a
 
 **Learning outcome:** components, props vs state, custom hooks, routing, render → interact → assert testing pattern.
 
+### Phase 1b — Testing sprint: Vitest + React Testing Library (components) + Cypress (navigation/e2e)
+
+**Layer:** Frontend · **Stack:** Vitest, React Testing Library, jsdom, Cypress · **Estimate:** half day
+
+Industry-standard split for this stack: **Vitest + RTL** for unit/component tests (fast, no browser, run in CI on every push), **Cypress** for real end-to-end navigation tests (actual browser, actual URL bar, actual clicks) — RTL never actually changes the URL, so router *behavior* (not just "did navigate() get called") needs Cypress.
+
+---
+
+#### Step 1 — Install Vitest + React Testing Library
+
+```bash
+npm install -D vitest jsdom @testing-library/react @testing-library/jest-dom @testing-library/user-event
+```
+
+- `vitest` — test runner, Vite-native, near-zero config since you're already on Vite.
+- `jsdom` — fake browser DOM so tests can run in Node without a real browser.
+- `@testing-library/react` — renders components into that fake DOM and gives you `screen.getByText()` etc.
+- `@testing-library/jest-dom` — adds matchers like `.toBeInTheDocument()`.
+- `@testing-library/user-event` — simulates real clicks/typing (more realistic than `fireEvent`).
+
+Add to `vite.config.ts`:
+```ts
+/// <reference types="vitest/config" />
+export default defineConfig({
+  // ...existing config
+  test: {
+    environment: "jsdom",
+    setupFiles: "./src/setupTests.ts",
+  },
+});
+```
+
+Create `src/setupTests.ts`:
+```ts
+import "@testing-library/jest-dom";
+```
+
+Add to `package.json` scripts: `"test": "vitest"`.
+
+Stop here, run `npm run test` — it should say "No test files found" (that's success, means the runner works).
+
+---
+
+#### Step 2 — First component test: `TransactionItem`
+
+Python analogy: this is `pytest` — `render()` ≈ setting up the object under test, `screen.getBy...` ≈ your assertions, except you're asserting against rendered DOM output instead of a return value.
+
+Create `src/features/transactions/TransactionItem.test.tsx` next to the component:
+```tsx
+import { render, screen } from "@testing-library/react";
+import { describe, it, expect } from "vitest";
+import { TransactionItem } from "./TransactionItem";
+
+describe("TransactionItem", () => {
+  it("renders the transaction name and amount", () => {
+    render(
+      <TransactionItem
+        transaction={{ id: 1, raw_name: "REWE", amount: -23.5, date: "2026-07-01" }}
+        onDelete={() => {}}
+      />
+    );
+
+    expect(screen.getByText("REWE")).toBeInTheDocument();
+    expect(screen.getByText(/23.5/)).toBeInTheDocument();
+  });
+});
+```
+
+Adjust the prop shape to match your actual `TransactionItem` props — check the file before writing this. Run `npm run test`, confirm it's green.
+
+---
+
+#### Step 3 — Interaction test: delete callback fires
+
+```tsx
+import userEvent from "@testing-library/user-event";
+import { vi } from "vitest";
+
+it("calls onDelete when the delete button is clicked", async () => {
+  const onDelete = vi.fn();
+  render(<TransactionItem transaction={{ id: 1, raw_name: "REWE", amount: -23.5, date: "2026-07-01" }} onDelete={onDelete} />);
+
+  await userEvent.click(screen.getByRole("button", { name: /delete/i }));
+
+  expect(onDelete).toHaveBeenCalledWith(1);
+});
+```
+
+`vi.fn()` ≈ `unittest.mock.Mock()` — a fake function you can assert was called, with what args.
+
+---
+
+#### Step 4 — List test: `TransactionList` renders N items and filters
+
+```tsx
+it("renders one row per transaction", () => {
+  const transactions = [
+    { id: 1, raw_name: "REWE", amount: -23.5, date: "2026-07-01" },
+    { id: 2, raw_name: "Salary", amount: 2000, date: "2026-07-01" },
+  ];
+  render(<TransactionList transactions={transactions} onDelete={() => {}} />);
+
+  expect(screen.getAllByRole("listitem")).toHaveLength(2);
+});
+```
+
+This only works if `TransactionList` renders real `<li>`/`role="listitem"` elements — if it's `<div>`s, either add semantic HTML (recommended, also helps accessibility) or query by `data-testid` instead.
+
+---
+
+#### Step 5 — Install Cypress for navigation/e2e
+
+```bash
+npm install -D cypress
+npx cypress open
+```
+
+`cypress open` launches an interactive browser the first time — it'll scaffold `cypress.config.ts` and a `cypress/e2e/` folder for you. Pick "E2E Testing" → your browser of choice. This is a real browser driving your real running app, not a simulation — closer to how you'd manually click through it.
+
+Add to `package.json` scripts: `"cypress": "cypress open"`, `"cypress:run": "cypress run"`.
+
+Point it at your dev server in `cypress.config.ts`:
+```ts
+import { defineConfig } from "cypress";
+
+export default defineConfig({
+  e2e: {
+    baseUrl: "http://localhost:5173",
+  },
+});
+```
+
+Stop here — confirm the Cypress app window opens and can see your project.
+
+---
+
+#### Step 6 — Navigation e2e test
+
+Dev server must be running (`npm run dev`) in a separate terminal for this.
+
+Create `cypress/e2e/navigation.cy.ts`:
+```ts
+describe("Navigation", () => {
+  it("navigates from Dashboard to Transactions and back", () => {
+    cy.visit("/");
+    cy.contains("h1", /dashboard/i); // adjust to your actual heading text
+
+    cy.contains("button", "Transactions").click();
+    cy.url().should("include", "/transactions");
+    cy.contains("h1", /transactions/i);
+
+    cy.contains("button", "Home").click();
+    cy.url().should("eq", "http://localhost:5173/");
+  });
+
+  it("navigates to /transactions via the See all button on the dashboard", () => {
+    cy.visit("/");
+    cy.contains("button", /see all/i).click();
+    cy.url().should("include", "/transactions");
+  });
+});
+```
+
+Run via `npx cypress run` (headless, CI-friendly) or `npx cypress open` (interactive, watch it click through the real browser).
+
+---
+
+**Learning outcome:** the RTL vs Cypress split — RTL for fast, isolated component behavior (runs in every CI push, no browser needed); Cypress for real user-facing flows across the whole app (slower, browser-based, run less often or pre-merge). This is the same split CREA will use.
+
 ### Phase 2 — Express backend + auth sprint
 **Layer:** Backend · **Stack:** Node, Express, TypeScript, ts-node-dev, PostgreSQL, JWT, bcrypt, Supertest, Vitest · **Estimate:** 1 day (weekend)
 

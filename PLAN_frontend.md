@@ -450,6 +450,34 @@ Now wire the upward flow.
 
 ## Phase 6 — Router (30 min)
 
+### step by step
+#### Step 1 — Install & wire up the router skeleton
+
+npm install react-router-dom (in frontend/)
+In main.tsx, wrap <App /> in <BrowserRouter>. This has to happen above App, since App will use <Routes>/<Link>/useNavigate, which only work inside a Router context.
+In App.tsx, replace the hardcoded <TransactionPage /> with <Routes> containing two <Route>s: / → DashboardPage, /transactions → TransactionPage.
+Stop here, run it, confirm both URLs render the right stub page.
+
+#### Step 2 — NavBar with programmatic navigation
+
+Build NavBar.tsx with two buttons/links: "Home" and "Transactions".
+Since you asked for programmatic navigation (not just <Link>), use useNavigate() and onClick={() => navigate("/transactions")} rather than <Link to=...>. (Note: <Link> is the idiomatic choice for plain nav — useNavigate is for navigating in response to logic, e.g. after a form submit. Fine to use it here since you asked, but flagging the distinction since it's new territory.)
+Add <NavBar /> in App.tsx above <Routes> so it persists across pages.
+Stop, confirm clicking nav buttons switches pages and highlights nothing yet (styling later).
+
+#### Step 3 — Dashboard page shell
+
+Flesh out DashboardPage.tsx (currently garbage placeholder) with three pieces, composed but built separately:
+RecentTransactions component — reuses TransactionItem/TransactionList filtered to last 3 days (client-side filter on your existing mock/API data by date).
+A tiny bar chart (income / expenses / net) — pull in the dataviz skill before writing this, and decide chart lib now: Recharts is the standard React choice, lightweight enough for a 3-bar chart.
+"See all" button → useNavigate() to /transactions.
+Build these one at a time, not all in one shot per your working style — recommend order: RecentTransactions first (reuses existing components), then the button (trivial), then the chart last (new dependency + new concept).
+
+#### Step 4 — Tests
+
+Per Phase 1 checklist: a routing test (nav click → URL/page changes), not full coverage.
+### Code
+
 Only start this once Phase 5 works. Now you add a Dashboard page and navigation.
 
 ```bash
