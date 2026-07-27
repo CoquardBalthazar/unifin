@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
-import type { Transaction } from "../../types/types";
+import type { Transaction, Filter } from "../../types/types";
 import { TransactionList } from "./TransactionList";
+import { FilterBar } from "./FilterBar";
+import { SummaryBar } from "./SummaryBar";
 import { fetchTransactions } from "../../api/transactions";
 
 export function TransactionPage() {
@@ -8,6 +10,7 @@ export function TransactionPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<Filter>("all");
 
   //   useEffect
   // run after the first re-render.
@@ -40,6 +43,23 @@ export function TransactionPage() {
     setTransactions((current) => current.filter((t) => t.id !== id));
   }
 
+  function handleFilterChange(next: Filter) {
+    setFilter(next);
+  }
+
+  //  --- Filtering : derived value array ---
+  //  Visible Transaction = Compute a derived array called visible —
+  // not stored in state, just a plain const computed on every render
+  // from transactions.filter(...):
+  const visible = transactions.filter((t) => {
+    if (filter === "income") {
+      return t.amount > 0;
+    }
+    if (filter === "expense") {
+      return t.amount < 0;
+    }
+    return true;
+  });
   //   Conditional rendering : early returns
   // Handle isLoading vs error
   if (isLoading) {
@@ -52,10 +72,16 @@ export function TransactionPage() {
   return (
     <main>
       <h1>Unifin - Transaction</h1>
-      <TransactionList
-        transactions={transactions}
-        onDelete={handleDelete}
-      ></TransactionList>
+      <FilterBar active={filter} onChange={handleFilterChange} />
+      <SummaryBar transactions={visible} />
+      {visible.length > 0 ? (
+        <TransactionList
+          transactions={visible}
+          onDelete={handleDelete}
+        ></TransactionList>
+      ) : (
+        <p className="muted">No Transactions match this filter</p>
+      )}
     </main>
   );
 }

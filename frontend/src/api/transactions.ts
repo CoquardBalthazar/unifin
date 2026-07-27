@@ -1,4 +1,4 @@
-import type { Transaction, Filter } from "../types/types.ts";
+import type { Transaction } from "../types/types.ts";
 
 export const MOCK = [
   {

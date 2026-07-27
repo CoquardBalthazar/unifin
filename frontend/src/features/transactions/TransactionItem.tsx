@@ -1,4 +1,5 @@
 import type { Transaction } from "../../types/types";
+import { useState } from "react";
 
 type Props = {
   transaction: Transaction;
@@ -6,6 +7,8 @@ type Props = {
 };
 
 export function TransactionItem({ transaction, onDelete }: Props) {
+  const [expanded, setExpanded] = useState(false);
+
   const { id, label, amount, date, category } = transaction;
   const isIncome = amount > 0;
   return (
@@ -43,6 +46,9 @@ export function TransactionItem({ transaction, onDelete }: Props) {
         className="shrink-0 rounded-full px-2 py-1 text-ink/40 hover:bg-expense-soft hover:text-expense"
       >
         ×
+      </button>
+      <button onClick={() => setExpanded(!expanded)}>
+        {expanded ? "▼" : "▶"}
       </button>
     </li>
   );
