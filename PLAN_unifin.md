@@ -248,6 +248,160 @@ This only works if `TransactionList` renders real `<li>`/`role="listitem"` eleme
 
 ---
 
+#### Step 4b — Extended component tests (do manually, new concepts per component)
+
+Components already testable with concepts covered so far (`render`, `screen.getByText`/`getByRole`, `userEvent`, `vi.fn`): `FilterBar`, `SummaryBar` — pure, no router, no async state.
+
+Remaining components each introduce a *new* testing concept — tackle one at a time, in this order:
+
+**1. `NavBar` — testing React Router components in isolation**
+
+`NavLink`/`useNavigate` throw at render time outside a router context, so wrap the component under test in `<MemoryRouter>` (a Router that lives entirely in memory — no real browser URL, for tests only). Assert on the active route via `aria-current="page"`, which React Router sets automatically on the active `NavLink` — more robust than string-matching your `linkClass` className.
+
+```tsx
+import { render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import { describe, it, expect } from "vitest";
+import { NavBar } from "./NavBar";
+
+describe("NavBar", () => {
+  it("marks the current route as active", () => {
+    render(
+      <MemoryRouter initialEntries={["/transactions"]}>
+        <NavBar />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("link", { name: "Transactions" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(screen.getByRole("link", { name: "Home" })).not.toHaveAttribute(
+      "aria-current",
+    );
+  });
+});
+```
+
+`initialEntries` seeds the in-memory history stack — this is how you simulate "the user is currently on `/transactions`" without a real browser URL.
+
+**2. `RecentTransactions`, `SummaryChart`, `TransactionPage` — mocking an async API module with `vi.mock`**
+
+All three call `fetchTransactions()`, which has a real `setTimeout` and a random 20% rejection — untestable as-is (flaky, slow). `vi.mock(...)` replaces the whole module with a mock at import time; `vi.mocked(fetchTransactions)` then gives you a typed handle to control what it resolves/rejects with per test.
+
+```tsx
+import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { RecentTransactions } from "./RecentTransactions";
+import { fetchTransactions } from "../../api/transactions";
+
+vi.mock("../../api/transactions");
+
+describe("RecentTransactions", () => {
+  beforeEach(() => {
+    vi.mocked(fetchTransactions).mockReset();
+  });
+
+  it("shows recent transactions once loaded", async () => {
+    vi.mocked(fetchTransactions).mockResolvedValue([
+      { id: "t1", label: "Salary", amount: 1600, date: "2026-07-26", category: "income" },
+    ]);
+
+    render(<RecentTransactions />);
+
+    expect(screen.getByText("Loading…")).toBeInTheDocument();
+    expect(await screen.findByText("Salary")).toBeInTheDocument();
+  });
+
+  it("shows a message when nothing is recent", async () => {
+    vi.mocked(fetchTransactions).mockResolvedValue([
+      { id: "t1", label: "Old rent", amount: -890, date: "2020-01-01", category: "Housing" },
+    ]);
+
+    render(<RecentTransactions />);
+
+    expect(
+      await screen.findByText("No transactions in the last 10 days."),
+    ).toBeInTheDocument();
+  });
+});
+```
+
+New syntax here: `findByText` is the **async** counterpart to `getByText` — it returns a `Promise` and retries for up to ~1s until a matching element appears (or throws). Use it whenever the assertion targets something that only appears *after* an effect/fetch resolves; `getByText` is synchronous and would run before the `useEffect` promise settles. `beforeEach` + `mockReset()` stops mock behavior from leaking between tests in the same file.
+
+**3. `SummaryChart` — testing chart libraries (Recharts)**
+
+Recharts measures its container via `ResizeObserver`/SVG layout APIs jsdom doesn't implement, so it often renders zero-size. Don't assert on pixels/bar geometry — assert only on the data your component computed and handed to the chart (that's your logic; how Recharts draws it is not your code's job to verify).
+
+```tsx
+import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import { SummaryChart } from "./SummaryChart";
+import { fetchTransactions } from "../../api/transactions";
+
+vi.mock("../../api/transactions");
+
+describe("SummaryChart", () => {
+  it("renders axis labels for income, expenses, net", async () => {
+    vi.mocked(fetchTransactions).mockResolvedValue([
+      { id: "t1", label: "Salary", amount: 1600, date: "2026-07-14", category: "income" },
+      { id: "t2", label: "Rent", amount: -890, date: "2026-07-03", category: "Housing" },
+    ]);
+
+    render(<SummaryChart />);
+
+    expect(await screen.findByText("Income")).toBeInTheDocument();
+    expect(screen.getByText("Expenses")).toBeInTheDocument();
+    expect(screen.getByText("Net")).toBeInTheDocument();
+  });
+});
+```
+
+If this still fails with layout-related jsdom errors, add a `ResizeObserver` stub to `setupTests.ts`:
+```ts
+global.ResizeObserver = class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+};
+```
+
+**4. `DashboardPage` — combines #1 and #2**
+
+Needs both `MemoryRouter` (for `useNavigate`/the "See all" button) and the `fetchTransactions` mock (since it renders `RecentTransactions` + `SummaryChart`, both of which fetch). Do this one last, once 1–3 are solid — it's the union of everything above, not a new concept:
+
+```tsx
+import { render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import userEvent from "@testing-library/user-event";
+import { describe, it, expect, vi } from "vitest";
+import { DashboardPage } from "./DashboardPage";
+import { fetchTransactions } from "../../api/transactions";
+
+vi.mock("../../api/transactions");
+
+describe("DashboardPage", () => {
+  it("navigates to /transactions when See all is clicked", async () => {
+    vi.mocked(fetchTransactions).mockResolvedValue([]);
+
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <DashboardPage />
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /see all/i }));
+    // MemoryRouter has no visible URL bar — assert via a route change effect,
+    // e.g. render <Routes> in the test and check the resulting screen content,
+    // or spy on useNavigate with vi.mock("react-router-dom", ...).
+  });
+});
+```
+
+Note the last test is intentionally left open-ended — asserting "did navigation happen" inside a bare `MemoryRouter` (no `<Routes>` around it) needs either a full `<Routes>` test harness or mocking `useNavigate` itself; work out which approach once you're there, it's a good exercise.
+
+---
+
 #### Step 5 — Install Cypress for navigation/e2e
 
 ```bash
