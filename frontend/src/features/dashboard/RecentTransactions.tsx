@@ -53,11 +53,11 @@ export function RecentTransactions() {
   const recents = transactions.filter((t) => isWithinLastDays(t.date, 3));
   return (
     <section>
-      <h2 className="text-lg font-semibold text-ink mb-2">Last 3 days</h2>
+      <h2 className="text-lg font-semibold text-ink mb-2">Last 10 days</h2>
       {recents.length > 0 ? (
         <TransactionList transactions={recents} onDelete={() => {}} />
       ) : (
-        <p className="muted">No transactions in the last 3 days.</p>
+        <p className="muted">No transactions in the last 10 days.</p>
       )}
     </section>
   );

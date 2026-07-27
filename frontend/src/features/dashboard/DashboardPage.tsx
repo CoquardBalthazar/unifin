@@ -2,6 +2,7 @@
 // import type { Transaction } from "../../types/types";
 import { useNavigate } from "react-router-dom";
 import { RecentTransactions } from "./RecentTransactions";
+import { SummaryChart } from "./SummaryChart";
 
 // type Props = {
 //     transactions : Transaction[],
@@ -13,6 +14,7 @@ export function DashboardPage() {
     <>
       <h1>Dashboard</h1>
       <RecentTransactions />
+      <SummaryChart />
       <button
         onClick={() => navigate("/transactions")}
         className="shrink-0 rounded-full px-2 py-1 text-white bg-primary hover:bg-primary-hover hover:text-white"
