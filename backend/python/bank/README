@@ -1,0 +1,12 @@
+This folder contains the various functions used to transform and homogenize the bank entries from the various banks.
+Here below the details of each file :
+
+bp.py : functions for La Banque Postale
+tsv_to_pdDf()
+
+c24.py : functions for C24 Bank
+csv_to_pdDf()
+
+combine_bank_data.py : fucntions to combine and produce the output file used for the Excels Konto
+merge_transactions()
+write_to_csv()
