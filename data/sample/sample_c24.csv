@@ -1,0 +1,11 @@
+Transaktionstyp,Buchungsdatum,Betrag,Zahlungsempfänger,IBAN,BIC,Verwendungszweck,Beschreibung,Kategorie,Unterkategorie
+Bargeldabhebung,04.03.2026,"-20,00",Sample ATM,,,,,Bargeld,Bargeld
+Kartenzahlung,03.03.2026,"-37,99",Sample Supermarket,,,,SAMPLE SUPERMARKET,Lebensmittel,Supermarkt
+Kartenzahlung,03.03.2026,"-8,95",Sample Drugstore,,,,SAMPLE DROGERIE,Shopping,Drogerie
+Echtzeit-Überweisung,02.03.2026,"-300,00",Sample Person One,DE00000000000000000000,SAMPLEXXX,,,Weitere Ausgaben,Weitere Ausgaben
+Kartenzahlung,27.02.2026,"-15,55",Sample Discount Store,,,,SAMPLE STORE,Lebensmittel,Supermarkt
+Online-Kartenzahlung,25.02.2026,"-15,46",Sample Software Co,,,,SAMPLE SOFTWARE,Freizeit & Unterhaltung,Entertainment
+Online-Kartenzahlung,20.02.2026,"-56,75",Sample Online Shop,,,,SAMPLE SHOP,Shopping,Online-Shopping
+SEPA-Lastschrift,15.02.2026,"-8,99",Sample Mobile Provider,DE00000000000000000001,SAMPLEXXX,Gebuehr fuer Mobilfunkvertrag,Sample Telecom GmbH,DSL & Mobilfunk,Prepaid
+SEPA-Überweisung,14.02.2026,"1900,00",Sample Employer GmbH,DE00000000000000000002,SAMPLEXXX,Gehalt,,Einkommen,Gehalt
+Echtzeit-Überweisung,10.02.2026,"-150,00",Sample Person Two,DE00000000000000000003,SAMPLEXXX,,,Weitere Ausgaben,Weitere Ausgaben
