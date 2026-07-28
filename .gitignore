@@ -9,6 +9,8 @@ frontend/.env
 # Banking data — never committed
 # -----------------------------------
 data/real/
+__pycache__/
+*.pyc
 
 # -----------------------------------
 # Private local context
