@@ -19,7 +19,7 @@ export function DashboardPage() {
         onClick={() => navigate("/transactions")}
         className="shrink-0 rounded-full px-2 py-1 text-white bg-primary hover:bg-primary-hover hover:text-white"
       >
-        See all
+        See all transactions
       </button>
     </>
   );

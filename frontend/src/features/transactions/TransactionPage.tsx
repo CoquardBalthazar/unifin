@@ -3,6 +3,7 @@ import type { Transaction, Filter } from "../../types/types";
 import { TransactionList } from "./TransactionList";
 import { FilterBar } from "./FilterBar";
 import { SummaryBar } from "./SummaryBar";
+import { TransactionForm } from "./TransactionForm";
 import { fetchTransactions } from "../../api/transactions";
 
 export function TransactionPage() {
@@ -47,6 +48,12 @@ export function TransactionPage() {
     setFilter(next);
   }
 
+  function handleAddTransaction(t: Omit<Transaction, "id">) {
+    setTransactions((current) => [
+      ...current,
+      { ...t, id: crypto.randomUUID() },
+    ]);
+  }
   //  --- Filtering : derived value array ---
   //  Visible Transaction = Compute a derived array called visible —
   // not stored in state, just a plain const computed on every render
@@ -74,6 +81,7 @@ export function TransactionPage() {
       <h1>Unifin - Transaction</h1>
       <FilterBar active={filter} onChange={handleFilterChange} />
       <SummaryBar transactions={visible} />
+      <TransactionForm onAdd={handleAddTransaction} />
       {visible.length > 0 ? (
         <TransactionList
           transactions={visible}
