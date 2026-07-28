@@ -3,15 +3,15 @@ services:
     image: postgres:16
     restart: unless-stopped
     environment:
-      POSTGRES_DB: unifin
-      POSTGRES_USER: unifin
-      POSTGRES_PASSWORD: unifin
+      POSTGRES_DB: db-unifin
+      POSTGRES_USER: u-unifin
+      POSTGRES_PASSWORD: pw-unifin
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U unifin"]
+      test: ["CMD-SHELL", "pg_isready -U u-unifin"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -20,16 +20,15 @@ services:
     build: ./backend
     restart: unless-stopped
     ports:
-      - "3000:3000"
-    environment:
-      DATABASE_URL: postgres://unifin:unifin@postgres:5432/unifin
+      - "4000:4000"
     env_file:
-      - ./backend/.env
       - ./backend/.env
     depends_on:
       postgres:
         condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
 
 volumes:
   postgres_data:
-
