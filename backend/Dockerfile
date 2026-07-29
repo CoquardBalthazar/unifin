@@ -9,4 +9,4 @@ COPY . .
 
 EXPOSE 4000
 
-CMD ["npx", "ts-node-dev", "--respawn", "--transpile-only", "./src/index.ts"]
+CMD ["npx", "tsx", "watch", "./src/index.ts"]

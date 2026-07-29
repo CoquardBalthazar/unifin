@@ -13,7 +13,7 @@ export function TransactionPage() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
 
-  //   useEffect
+  //   useEffect = access elements outside (Data API, Browser API)
   // run after the first re-render.
   // [] : no dependencies = never re-runs
   // cleanup : ignore flag
