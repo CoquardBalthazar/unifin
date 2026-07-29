@@ -1648,6 +1648,12 @@ Paste the output into `backend/.env` as `ADMIN_PASSWORD_HASH`. The plaintext pas
 
 ##### `backend/.env.example` (extended)
 
+Generation of the JWT_SECRET via:
+
+```
+docker compose exec app node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+Copy the result to the file below :
 ```
 DATABASE_URL=postgres://unifin:unifin@postgres:5432/unifin
 PORT=4000
@@ -1838,6 +1844,10 @@ export function LoginPage() {
   );
 }
 ```
+
+!!!
+DID NOT TEST YET - Next time review the arhcitecture first, then continue building around (frontend service that fetch data for example)
+!!!
 
 **2b done when:** `curl -X POST localhost:4000/api/auth/login -d '{"email":...,"password":...}'` returns a token, that same token in an `Authorization: Bearer` header gets you a 200 from `/api/transactions`, a missing/garbage token gets 401, and the `LoginPage` form round-trips through to a working `localStorage` token from the real browser.
 

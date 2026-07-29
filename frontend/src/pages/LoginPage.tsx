@@ -1,12 +1,24 @@
-import React, { useState } from "react";
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { login } from "../api/auth";
+import { useAuth } from "../hooks/useAuth";
 
 export function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const { markLoggedIn } = useAuth();
+  const navigate = useNavigate();
 
-  function handleSubmit(e: React.SubmitEvent<HTMLFormElement>) {
+  async function handleSubmit(e: React.SubmitEvent<HTMLFormElement>) {
     e.preventDefault();
-    console.log({ email, password });
+    try {
+      await login(email, password);
+      markLoggedIn();
+      navigate("/"); // programmatic nav — useNavigate, not <Link>, since it's inside a handler
+    } catch {
+      setError("Invalid email or password.");
+    }
   }
 
   return (
