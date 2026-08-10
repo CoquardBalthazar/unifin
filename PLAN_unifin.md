@@ -1846,7 +1846,14 @@ export function LoginPage() {
 ```
 
 !!!
-DID NOT TEST YET - Next time review the arhcitecture first, then continue building around (frontend service that fetch data for example)
+curl -X POST request is working - had to restart the docker container.
+Adding tests for login page before moving on to the next pages
+Valid email + valid password → 200 + { token } present.
+Valid email + wrong password → 401.
+Wrong/unknown email → 401.
+Missing email or password in body → 400 (this is the bug you just found — write the test then confirm the fix makes it pass).
+requireAuth middleware: request to /api/transactions with no Authorization header → 401; with a garbage/expired token → 401; with a valid token → passes through (200, whatever the route normally returns).
+Want to write that test file next, one case at a time the way you did for transactions?
 !!!
 
 **2b done when:** `curl -X POST localhost:4000/api/auth/login -d '{"email":...,"password":...}'` returns a token, that same token in an `Authorization: Bearer` header gets you a 200 from `/api/transactions`, a missing/garbage token gets 401, and the `LoginPage` form round-trips through to a working `localStorage` token from the real browser.

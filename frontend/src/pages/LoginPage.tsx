@@ -39,6 +39,11 @@ export function LoginPage() {
           placeholder="Password"
           className="rounded-(--radius-DEFAULT) border border-border px-2 py-1"
         />
+        {error && (
+          <p role="alert" className="text-sm text-red-600">
+            {error}
+          </p>
+        )}
         <button
           type="submit"
           className="rounded-full bg-primary px-3 py-1 text-sm font-medium text-white"
