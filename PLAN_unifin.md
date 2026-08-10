@@ -1,7 +1,12 @@
 # Unifin — Bank Tracker · Development Plan
 
 > Working document. Living plan for `unifin` (Unifin).
-> Created: 2026-06-22. Last updated: 2026-06-24.
+> Created: 2026-06-22. Last updated: 2026-08-10.
+>
+> **Status: Phases 1 and 2 complete.** Frontend shell, routing, tests (Vitest + RTL + Cypress),
+> Docker Compose, Knex, Express CRUD, JWT auth — all shipped and tested.
+> **Active target: working, deployed v1.0.0 by mid-September 2026.**
+> See §5.0 for the locked scope and week-by-week schedule.
 
 ---
 
@@ -58,16 +63,46 @@ Real transaction files are **never committed.** The repo is public and portfolio
 
 ## 3. Data schema
 
-Four tables. Designed once, never changed without a migration file.
+Five tables for v1. Designed once, never changed without a migration file.
+Full column list + the reasoning behind each non-obvious column lives in **Phase 4**.
 
 ```
-accounts        — id, bank, account_type, currency, label
-transactions    — id, account_id, date, raw_name, amount, flow, category_id (nullable), source_file, imported_at
+accounts        — id, bank, account_type, currency, label,
+                  opening_balance, opening_balance_date
+
+transactions    — id, date, raw_name, amount, flow, created_at            (Phase 2a)
+                  account_id, import_id, source_file, imported_at         (Phase 4)
+                  category_id, category_source, category_confidence,
+                  category_confirmed_at                                    (Phase 4)
+                  normalized_name                                          (Phase 4)
+                  dedupe_hash, dedupe_seq   UNIQUE(dedupe_hash, dedupe_seq)(Phase 4)
+                  transfer_pair_id (self-FK, nullable)                     (Phase 4)
+
 categories      — id, label, type (income/expense/transfer), visible
 category_rules  — id, pattern, category_id, priority
+imports         — id, account_id, filename, row_count, inserted_count,
+                  skipped_count, statement_balance, statement_date, imported_at
 ```
 
-**The rules loop:** on import, `raw_name` matched against `category_rules` (substring, ordered by priority). Match → `category_id` set. No match → `NULL` (shown as "uncategorized", flagged for review). Manual override in UI → optionally writes new rule → next import auto-categorizes it.
+`recurring_series` (+ `transactions.recurring_series_id`) is deliberately **not** in v1 —
+it arrives with Phase 9 as its own migration.
+
+**Four columns that exist before the feature that uses them.** They are cheap to add now
+(4 lines in a migration) and expensive to retrofit later, because every query, TS type,
+controller and component written between Phase 4 and Phase 10 would otherwise hardcode
+their absence:
+
+| Column | Used by | Why it can't wait |
+|---|---|---|
+| `category_source` (`rule`/`ai`/`manual`) | Phase 10 | Distinguishes a guess from a decision. Without it a `category_id` is just a `category_id`. |
+| `category_confidence` | Phase 10 | Lets you sort "review these 12 first" |
+| `category_confirmed_at` | Phase 5 + 10 | **This is the "temporary" flag.** `NULL` = the app guessed and you haven't looked. Set = you validated it. Orthogonal to `category_source` on purpose: bulk-validating an AI suggestion sets `confirmed_at` but keeps `source='ai'`, so you can measure how often the AI was right. |
+| `transfer_pair_id` | Phase 6 | Links the outgoing BP row to the incoming C24 row. Not needed for *exclusion* (that's a `WHERE categories.type != 'transfer'`), but it's the only way to catch money that left one account and never arrived at the other. |
+
+**The rules loop:** on import, `normalized_name` matched against `category_rules` (substring,
+ordered by priority). Match → `category_id` set, `category_source = 'rule'`. No match → `NULL`
+(shown as "uncategorized", flagged for review). Manual override in the UI → `category_source = 'manual'`,
+`category_confirmed_at = now()`.
 
 **Categories** seeded from existing `FOLGUNG_der_Kontos_WIP.xlsx` taxonomy:
 FOOD & Households, HOUSING rent, TRANSPORT, HOBBIES, HEALTH, TRIPS, SAVINGS, STUDIES, PHONE bundle, PARTIES & Sorties, OTHERS-inflow, OTHERS-outflow, ARBEIT, internal transfers (BALU), scholarships (BRMI, CROUS, Erasmus+), etc.
@@ -120,6 +155,85 @@ unifin/
 ## 5. Phased plan
 
 Each phase is tagged with the layer(s) it touches, the tech stack in play, and a rough time estimate. Commands are run by hand (per project conventions) — no assistant-driven scaffolding.
+
+---
+
+### 5.0 — v1 scope lock + schedule (set 2026-08-10)
+
+**Target: a deployed, working app by mid-September 2026** that does what the Excel sheet does:
+import bank exports from BP + C24, reject rows already imported, show both banks' transactions,
+reconcile balances, categorize by hand.
+
+#### Estimation basis — read this before trusting any number below
+
+Measured from git history, not guessed:
+
+| Phase | This plan's original estimate | What it actually took |
+|---|---|---|
+| Phase 1 (1a+1b+1c) | "1 day" | 4 active sessions (07-22 → 07-28) |
+| Phase 2 (2a+2b) | "1 day (weekend)" | 3 active sessions (07-28 → 08-10) |
+
+7 active days across 19 calendar days, one full week off.
+**Original estimates ran ~3.5× optimistic.** Real cadence: 2–3 sessions/week, ~3.5h per session.
+
+All estimates below are in **sessions (~3.5h)**, using that measured rate. The schedule needs
+~3.25 sessions/week — above the historical average, achievable, **with zero slack.**
+One more week off pushes v1.0.0 to end of September.
+
+#### Phase order — note the deploy split
+
+Phase 8 is split. **The app goes live in week 3, when it is just "login + a table of transactions."**
+
+Three reasons, in order:
+1. If week 5 runs out, there's a **live URL with a partial app** instead of a complete app on localhost. For applications that's the whole difference.
+2. The first Railway deploy always bleeds (env vars, migrations against a remote DB, `DATABASE_URL` format, CORS). Debug that against 2 endpoints, not 12.
+3. Phases 5 and 6 then deploy continuously — which is exactly the model the post-launch backlog (7/9/10) needs anyway.
+
+| # | Phase | Sessions | Delivers |
+|---|---|---|---|
+| **3** | Skeleton hardening *(trimmed)* | 1.5 | `RequireAuth`, `GET /health`, Vite proxy → backend |
+| **4** | Schema + ETL + **duplicate detection** | 3.5 | 4 migrations, accounts seeded, `db_insert.py` writes real BP+C24 rows, duplicates rejected |
+| **8a** | **Deploy early** | 2 | Railway (backend + Postgres), Vercel (frontend), secrets, prod migrations → **live URL** |
+| **5** | Transactions UI + manual categorization | 3 | Both banks in one table, inline category dropdown, uncategorized filter, search |
+| **6** | Overview + balances + reconciliation | 4.5 | Yearly category totals, transfer exclusion, per-account balance cards, reconciliation view |
+| **8b** | CI/CD + ship | 1.75 | GitHub Actions (lint → test w/ Postgres service → auto-deploy), prod smoke test, tag `v1.0.0` |
+| | | **16.25** | |
+
+#### Week by week
+
+| Week | Dates | Sessions | Work |
+|---|---|---|---|
+| 1 | Aug 11–17 | 2.75 | Phase 3 complete · migrations M1–M4 written and run · **sample fixtures created** |
+| 2 | Aug 18–24 | 3.25 | Seed accounts + categories · `db_insert.py` rewrite (normalize + hash + seq) · verify vs sample, then real · start Railway |
+| 3 | Aug 25–31 | 3.25 | **Railway + Vercel live** · `GET /transactions` filtered · table rendering real data |
+| 4 | Sep 1–7 | 3.5 | Inline category PATCH · uncategorized filter · search · start overview aggregation |
+| 5 | Sep 8–14 | 3.5 | Balance cards · reconciliation view · transfer exclusion · Actions pipeline · smoke test · **tag `v1.0.0`** |
+
+#### Cut from v1 — deferred, shipped later as updates to the running app
+
+| Cut | Was in | Saves | Why it's safe |
+|---|---|---|---|
+| `useAuth` → Context provider | Phase 3 | 0.75 | The existing hook works. Prop-drill until it hurts. |
+| CI as its own phase | Phase 3 | 1.0 | Merged into 8b, where the deploy pipeline lives anyway |
+| Rules **learning-loop UI** | Phase 5 | 1.0 | The substring *matcher* stays (~15 lines of Python in the ETL) — that's the labour saver. Only the in-app "always categorize this as X" button is deferred; edit the `category_rules` table directly for now. |
+| Pagination | Phase 5 | 0.5 | ~1000 rows. Send them all. |
+| Drill-down (category total → rows) | Phase 6 | 0.5 | Search + category filter covers 80% of it |
+| Phase 7 (mobile + import UI) | — | 5.0 | Post-launch |
+| Phase 9 (recurring detection) | — | 3.0 | Post-launch |
+| Phase 10 (AI categorizer) | — | 4.5 | Post-launch |
+
+> **Do not also cut the rules matcher.** Categorizing ~1000 rows entirely by hand is a 4-hour
+> clicking session that will not get finished. The existing Excel taxonomy will auto-hit 60–70%
+> of rows for near-zero build cost, leaving a few hundred for manual review.
+
+#### Known risks
+
+1. **Phase 4 against real data is the schedule killer.** 525 BP rows (TSV, ISO-8859-1, 7-row header) + ~508 C24 rows (CSV, UTF-8 BOM, semicolon), and the dedupe hash has to be right or the problem surfaces at row 900. Run against `data/sample/` first.
+2. **`data/sample/sample_bp.tsv` and `sample_c24.csv` still do not exist.** Hard blocker for Phase 4 *and* for CI in 8b. Budgeted into week 1.
+3. **First Railway deploy may eat 2 sessions instead of 1.** Exactly why 8a sits in week 2–3 with runway behind it, not in week 5 where it would sink the date.
+4. **Offline homework, week 1, no coding:** look up the real account balance on the date of the earliest imported transaction, for both BP and C24. That's `accounts.opening_balance` / `opening_balance_date`. Without it the Phase 6 reconciliation view is off by a constant and a session gets burned hunting a bug that isn't one.
+
+---
 
 ### Phase 1 — React fundamentals sprint
 **Layer:** Frontend · **Stack:** React, Vite, TypeScript, React Router, Vitest, React Testing Library · **Estimate:** 1 day
@@ -1847,102 +1961,358 @@ export function LoginPage() {
 
 !!!
 curl -X POST request is working - had to restart the docker container.
+
 Adding tests for login page before moving on to the next pages
 Valid email + valid password → 200 + { token } present.
 Valid email + wrong password → 401.
 Wrong/unknown email → 401.
 Missing email or password in body → 400 (this is the bug you just found — write the test then confirm the fix makes it pass).
 requireAuth middleware: request to /api/transactions with no Authorization header → 401; with a garbage/expired token → 401; with a valid token → passes through (200, whatever the route normally returns).
-Want to write that test file next, one case at a time the way you did for transactions?
+DONE
 !!!
 
 **2b done when:** `curl -X POST localhost:4000/api/auth/login -d '{"email":...,"password":...}'` returns a token, that same token in an `Authorization: Bearer` header gets you a 200 from `/api/transactions`, a missing/garbage token gets 401, and the `LoginPage` form round-trips through to a working `localStorage` token from the real browser.
 
 **Learning outcome:** Docker Compose with a real healthcheck/depends_on chain, Knex migrations end-to-end, Express routing + middleware, bcrypt/JWT auth internals (including the timing-safety caveat), protected routes, and wiring frontend auth to a real API.
 
-### Phase 3 — Skeleton hardening
-**Layer:** Full-stack · **Stack:** React Context, GitHub Actions · **Estimate:** 2–3 hours
+### Phase 3 — Skeleton hardening (trimmed)
+**Layer:** Full-stack · **Stack:** React Router, Express · **Estimate:** 1.5 sessions · **Week 1**
 
-*Docker Compose + Knex + the login flow already exist as of Phase 2a/2b. This phase formalizes auth on the frontend and wraps everything in CI — what's left of the original "skeleton hardening" scope.*
+*Docker Compose + Knex + the login flow already exist as of Phase 2a/2b. Repo creation and
+`.gitignore` are done. CI moved to Phase 8b, where the deploy pipeline lives. React Context
+is cut — the `useAuth` hook from 2b is good enough until it hurts.*
 
-- [ ] Create repo `unifin` on GitHub (start private, make public once gitignore confirmed)
-- [ ] `.gitignore` — first thing written: `data/real/`, `backend/.env`, `frontend/.env`, `CLAUDE.local.md`
-- [ ] `GET /health` route, confirmed reachable through Docker (no auth required — used by CI/deploy checks)
-- [ ] Tailwind setup on the frontend, Vite dev-server proxy → backend
-- [ ] Promote Phase 2b's `useAuth` into a Context provider so `isLoggedIn` doesn't need re-deriving per component
-- [ ] Protected route wrapper (`<RequireAuth>`) around `/`, `/transactions` — redirects to `/login` when logged out
-- [ ] GitHub Actions CI: lint + build on push, backend tests against a Postgres service container
-- [ ] Confirm full loop: login → protected page → `GET /health` with token → 200, logout → redirected to `/login`
+- [ ] ~~Create repo `unifin` on GitHub~~ — **done**
+- [ ] ~~`.gitignore`: `data/real/`, `backend/.env`, `frontend/.env`, `CLAUDE.local.md`~~ — **done**
+- [ ] `GET /health` route, no auth required (used by Railway healthcheck + CI). Returns `{ status: 'ok', db: 'ok' }` — hit Postgres with a `SELECT 1` so it actually proves the DB link, not just that Node is alive.
+- [ ] Vite dev-server proxy `/api` → `http://localhost:4000`, so the frontend's relative `fetch('/api/...')` calls work in dev without CORS config
+- [ ] Protected route wrapper `<RequireAuth>` around `/` and `/transactions` — reads `useAuth().isLoggedIn`, `<Navigate to="/login" replace />` when false
+- [ ] Logout button in `NavBar` → `markLoggedOut()` → redirect to `/login`
+- [ ] Confirm the full loop end to end: login → protected page → refresh (token survives) → logout → bounced to `/login`
 
-**Learning outcome:** React Context for cross-cutting state (auth), protected-route pattern, CI running against a real ephemeral Postgres — the parts CREA will fork.
+**Deferred:** `useAuth` → Context provider. Revisit when more than ~3 components need `isLoggedIn`.
 
-### Phase 4 — Database schema + ETL
-**Layer:** Backend · **Stack:** Knex migrations, PostgreSQL, Python (existing ETL) · **Estimate:** half day
+**Learning outcome:** the protected-route pattern, dev-server proxying, and a healthcheck
+endpoint that means something — all three carry straight into CREA.
 
-*Migrations for the remaining tables. Python ETL writes to Postgres.*
+### Phase 4 — Database schema + ETL + duplicate detection
+**Layer:** Backend · **Stack:** Knex migrations, PostgreSQL, Python · **Estimate:** 3.5 sessions · **Weeks 1–2**
 
-- [ ] Migrations: `transactions`, `categories`, `category_rules`
-- [ ] Seed script: populate `categories` from existing taxonomy, using `data/sample/`
-- [ ] Extend Python ETL: `db_insert.py` writes normalized rows to `transactions` (instead of CSV)
-- [ ] `backend/.env.example`: `DATABASE_URL`, `JWT_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD_HASH`
-- [ ] Verify: run `db_insert.py` with sample fixture → check row count + dates + amounts in DB
+*The real schema lands here, and the Python ETL starts writing to Postgres with duplicate
+rejection. This is the highest-risk phase in the plan — see §5.0 risk 1.*
 
-**Learning outcome:** full Knex migration workflow, seeding, Python writing directly to Postgres.
+**Note on the original plan:** the previous checklist omitted the `accounts` table entirely,
+even though §3 lists it. Without it there is no `account_id` on transactions, and balance
+reconciliation is impossible. Fixed below.
 
-### Phase 5 — Transactions UI
-**Layer:** Full-stack · **Stack:** Express (PATCH routes), Knex, React (controlled inputs) · **Estimate:** 1 day
+Four migrations, **in this order** — FK targets must exist before the table referencing them.
 
-*The core editing loop — this is where the app becomes useful.*
+---
 
-- [ ] `GET /transactions` — paginated, filterable by account / date range / flow / category
-- [ ] `TransactionsPage`: table — Date · Bank · Name · Amount · Category
-- [ ] Inline category dropdown: `PATCH /transactions/:id` `{ category_id }`
-- [ ] "Uncategorized" filter — one click to see only `category_id = NULL`
-- [ ] Auto-categorize on import: match `raw_name` against `category_rules`
-- [ ] Rules learning loop: manual override → offer "always categorize this as X" → new `category_rules` row
+#### M1 — `accounts`
 
-**Learning outcome:** PATCH endpoints, controlled React inputs, optimistic UI updates.
+```ts
+export async function up(knex: Knex): Promise<void> {
+  await knex.schema.createTable("accounts", (table) => {
+    table.increments("id").primary();
+    table.string("bank").notNullable();               // 'BP' | 'C24'
+    table.string("account_type").notNullable();       // 'checking' | 'savings'
+    table.string("currency", 3).notNullable().defaultTo("EUR");
+    table.string("label").notNullable();              // "BP Compte Courant"
+    table.decimal("opening_balance", 12, 2).notNullable().defaultTo(0);
+    table.date("opening_balance_date");               // the balance was X on this date
+    table.timestamp("created_at").defaultTo(knex.fn.now());
+  });
+}
+```
 
-### Phase 6 — Overview
-**Layer:** Full-stack · **Stack:** Knex/SQL aggregation, React · **Estimate:** half day
+`opening_balance` is what makes reconciliation possible at all. The BP export starts in 2022 —
+without a known balance at that date, every computed balance is off by whatever sat in the
+account before the first imported row.
 
-*The yearly dashboard. Pure SQL + simple React.*
+---
 
-- [ ] `GET /overview?year=YYYY` → `{ category, type, total }[]` grouped by category
-- [ ] `OverviewPage`: year selector, category totals table, INFLOW / OUTFLOW split
-- [ ] Drill down: click a category total → transactions feeding it (source traceability)
+#### M2 — `categories` + `category_rules`
+
+```ts
+await knex.schema.createTable("categories", (table) => {
+  table.increments("id").primary();
+  table.string("label").notNullable().unique();
+  table.enu("type", ["income", "expense", "transfer"]).notNullable();
+  table.boolean("visible").notNullable().defaultTo(true);
+});
+
+await knex.schema.createTable("category_rules", (table) => {
+  table.increments("id").primary();
+  table.string("pattern").notNullable();              // matched against normalized_name
+  table.integer("category_id").references("id").inTable("categories").onDelete("CASCADE");
+  table.integer("priority").notNullable().defaultTo(100);   // lower wins
+});
+```
+
+---
+
+#### M3 — `imports` (one row per file fed in)
+
+```ts
+await knex.schema.createTable("imports", (table) => {
+  table.increments("id").primary();
+  table.integer("account_id").references("id").inTable("accounts").notNullable();
+  table.string("filename").notNullable();
+  table.integer("row_count").notNullable();           // rows present in the file
+  table.integer("inserted_count").notNullable();      // actually new
+  table.integer("skipped_count").notNullable();       // duplicates rejected
+  table.decimal("statement_balance", 12, 2);          // what the bank says — nullable
+  table.date("statement_date");
+  table.timestamp("imported_at").defaultTo(knex.fn.now());
+});
+```
+
+Serves two features from one table: the dedupe audit trail *and* the reconciliation anchor.
+Folding `statement_balance` in here rather than a separate `account_statements` table is
+slightly impure (re-importing a file duplicates the balance record) but harmless at this scale —
+one table beats two.
+
+---
+
+#### M4 — `alterTable("transactions")`
+
+Append-only on top of the Phase 2a table. **This is the migration that matters.**
+
+```ts
+export async function up(knex: Knex): Promise<void> {
+  await knex.schema.alterTable("transactions", (table) => {
+    // --- ownership + traceability ---
+    table.integer("account_id").references("id").inTable("accounts");
+    table.integer("import_id").references("id").inTable("imports");
+    table.string("source_file");
+    table.timestamp("imported_at").defaultTo(knex.fn.now());
+
+    // --- categorization: rules, AI and manual all land in these four ---
+    table.integer("category_id").references("id").inTable("categories");
+    table.enu("category_source", ["rule", "ai", "manual"]);  // null = uncategorized
+    table.decimal("category_confidence", 3, 2);              // 0.00–1.00, AI only
+    table.timestamp("category_confirmed_at");                // null = TEMPORARY
+
+    // --- matching key: search, rules and (later) the AI all read this ---
+    table.string("normalized_name").notNullable().defaultTo("");
+
+    // --- duplicate detection ---
+    table.string("dedupe_hash").notNullable().defaultTo("");
+    table.integer("dedupe_seq").notNullable().defaultTo(0);
+    table.unique(["dedupe_hash", "dedupe_seq"]);
+
+    // --- internal transfers ---
+    table.integer("transfer_pair_id").references("id").inTable("transactions");
+
+    table.index("normalized_name");
+    table.index("date");
+    table.index("category_id");
+  });
+}
+```
+
+**`dedupe_seq` exists because a naive unique hash is wrong.** Two €2.50 coffees at the same
+shop on the same day are two real transactions, not a duplicate. So:
+
+```
+dedupe_hash = sha256(f"{account_id}|{date}|{amount}|{raw_name}")
+dedupe_seq  = 0, 1, 2… numbering identical rows within a single import file
+```
+
+Re-import an overlapping export → the same rows compute the same `(hash, seq)` → the unique
+constraint rejects them. A genuinely new third coffee gets `seq = 2` and inserts fine.
+~10 lines of Python, and it is the difference between a database you trust and one you don't.
+
+**`normalized_name`** — `raw_name` uppercased, punctuation and reference numbers stripped:
+`"CARTE 12/05 LIDL 4783//DE"` → `"LIDL"`. One column, four features get better: search matches,
+rules match, recurring detection groups (Phase 9), and the AI sees ~200 distinct strings instead
+of ~900 (cheaper, more consistent — Phase 10).
+
+**Do not add `'transfer'` to the `flow` enum.** `flow` is the sign of the amount — a transfer is
+still an outflow on one side and an inflow on the other. Transfer-ness belongs on `categories.type`.
+Also note Knex's `table.enu()` compiles on Postgres to a varchar + CHECK constraint, so extending
+one later means dropping and recreating that constraint — another reason to get the values right now.
+
+---
+
+#### Checklist
+
+- [ ] **Create the sample fixtures first** — `data/sample/sample_bp.tsv`, `data/sample/sample_c24.csv`. Synthetic: fake payees, rounded amounts, but **byte-identical format** to the real thing (ISO-8859-1 + 7-row header for BP; UTF-8 BOM + semicolon for C24), including at least one deliberate duplicate row and one same-day same-amount pair to exercise `dedupe_seq`.
+- [ ] Migrations M1 → M4, run in order
+- [ ] Seed `accounts`: BP + C24 rows with real `opening_balance` / `opening_balance_date` (§5.0 risk 4)
+- [ ] Seed `categories` from the `FOLGUNG_der_Kontos_WIP.xlsx` taxonomy, with correct `type` — **every internal-transfer category must be `type = 'transfer'`** or Phase 6's totals will lie
+- [ ] Seed `category_rules` from the existing Excel mapping
+- [ ] `db_insert.py`: compute `normalized_name` → `dedupe_hash` → `dedupe_seq`, match `category_rules`, insert with `ON CONFLICT (dedupe_hash, dedupe_seq) DO NOTHING`, write the `imports` row with real counts
+- [ ] Verify on sample: row counts, dates, amounts — then **re-run the same file** and confirm `inserted_count = 0`, `skipped_count = row_count`
+- [ ] Verify on real BP + C24 exports, then re-run with a deliberately overlapping export
+
+**4 done when:** importing the same file twice adds nothing the second time, and the `imports`
+table shows honest inserted/skipped counts.
+
+**Learning outcome:** full Knex migration workflow including `alterTable`, FK design, unique
+constraints as a correctness guarantee rather than a formality, and Python writing directly
+to Postgres with conflict handling.
+
+---
+
+### Phase 8a — Deploy early
+**Layer:** DevOps · **Stack:** Railway, Vercel · **Estimate:** 2 sessions · **Weeks 2–3**
+
+*Ship it while it is still small. At this point the app is "login + a table of transactions" —
+which is exactly the right size for a first deploy.*
+
+- [ ] Railway project: PostgreSQL service + backend service from `backend/Dockerfile`
+- [ ] Run migrations against the Railway DB (`knex migrate:latest` with the prod `DATABASE_URL`)
+- [ ] Railway env vars: `DATABASE_URL`, `JWT_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD_HASH`, `PORT` — **new secrets for prod, never the dev ones**
+- [ ] Railway healthcheck → `GET /health` (from Phase 3)
+- [ ] CORS on the backend: allow the Vercel origin — in dev the Vite proxy hides this, in prod it does not
+- [ ] Vercel project from `frontend/`, set `VITE_API_URL` → the Railway backend URL
+- [ ] Frontend `api/*.ts`: swap relative `/api/...` for `` `${import.meta.env.VITE_API_URL}/api/...` ``
+- [ ] Load real data into the prod DB: run `db_insert.py` against the Railway `DATABASE_URL`
+- [ ] Smoke test from the phone browser: log in, see transactions
+
+**8a done when:** there is a URL you can open on your phone, log into, and see your real
+transactions on. Deploy is still manual (`git push` → Railway/Vercel auto-build); the
+Actions pipeline comes in 8b.
+
+**Learning outcome:** the gap between "works in Docker Compose" and "works in prod" — CORS,
+env var management across two platforms, and running migrations against a database you can't
+`docker exec` into.
+
+### Phase 5 — Transactions UI + manual categorization
+**Layer:** Full-stack · **Stack:** Express (PATCH routes), Knex, React (controlled inputs) · **Estimate:** 3 sessions · **Weeks 3–4**
+
+*The core editing loop — this is where the app replaces the spreadsheet.*
+
+- [ ] `GET /transactions` — filterable by `account_id` / date range / `flow` / `category_id` / `uncategorized` / `q`. **No pagination** — ~1000 rows, send them all.
+- [ ] `TransactionsPage`: table — Date · Bank · Name · Amount · Category. Bank comes from the `accounts` join.
+- [ ] Account filter: All / BP / C24
+- [ ] Inline category dropdown → `PATCH /transactions/:id { category_id }`, which also sets `category_source = 'manual'` and `category_confirmed_at = now()` server-side
+- [ ] Optimistic update: set the new category in React state immediately, roll back on a failed response — the alternative is a visible lag on every single click, several hundred times
+- [ ] "Uncategorized" filter — one click to `category_id IS NULL`
+- [ ] Rows where `category_confirmed_at IS NULL` render visually distinct (dashed chip border) — a rule-matched guess is not a decision. This is the same treatment Phase 10's AI suggestions will reuse.
+- [ ] Search box over `normalized_name` — `ILIKE '%q%'`, debounced ~300ms on the input so it doesn't fire a request per keystroke
+
+**Deferred:** pagination; the rules learning loop ("always categorize this as X" → new
+`category_rules` row). For now, edit the `category_rules` table directly and re-import.
+
+**5 done when:** you can find any transaction across both banks in under 5 seconds and
+categorize it in one click.
+
+**Learning outcome:** PATCH endpoints, controlled React inputs, optimistic UI updates with
+rollback, debounced search input.
+
+### Phase 6 — Overview + balances + reconciliation
+**Layer:** Full-stack · **Stack:** Knex/SQL aggregation, React · **Estimate:** 4.5 sessions · **Weeks 4–5**
+
+*Excel parity, plus the thing Excel never told you: whether the numbers are actually complete.*
+
+#### Overview
+
+- [ ] `GET /overview?year=YYYY&account_id=` → `{ category, type, total }[]` grouped by category
+- [ ] **Transfer exclusion:** every aggregate excludes `categories.type = 'transfer'`. A €500 BP→C24 transfer otherwise counts as both an expense and an income, and every total on the page is wrong. Cheap to write, essential to verify — check one known transfer by hand.
+- [ ] `OverviewPage`: year selector, category totals table, INFLOW / OUTFLOW / NET split
 - [ ] Month breakdown: same query grouped by month
 - [ ] Account filter: one bank or all
 
-**Learning outcome:** SQL aggregation via Knex, derived data in React without extra state.
+#### Balances + reconciliation
 
-### Phase 7 — Mobile + file import from UI
-**Layer:** Full-stack · **Stack:** Express (multer, child_process), React (responsive Tailwind) · **Estimate:** 1 day
+- [ ] `GET /accounts/balances` → per account: `opening_balance + SUM(amount)` = computed balance, plus the latest `imports.statement_balance` and the delta
+- [ ] Balance cards on the Dashboard: one per account (BP, C24) + a combined total. **Transfers are included here** — unlike the overview totals. A transfer genuinely moves money out of one account and into the other; it's only the *category* aggregates where counting it twice is wrong. Worth writing down, because it looks like an inconsistency and isn't.
+- [ ] `ReconciliationPage`: per account, the computed balance vs. the bank's stated balance, delta highlighted — green when 0, red when not
+- [ ] Delta drill-down: when a delta is non-zero, list that account's transactions around the statement date so the gap can be found by eye
+- [ ] Transfer pairing: match outgoing/incoming rows across accounts (same amount, opposite sign, ≤3 days apart) → populate `transfer_pair_id`. Flag unpaired transfer-category rows — money that left one account and never arrived is exactly the failure the pairing exists to catch.
 
-*Makes the app actually usable on the phone during downtime.*
+**Deferred:** drill-down from a category total to its transactions (search + category filter
+covers most of it).
 
-- [ ] `POST /import` endpoint: file upload (multer), Node spawns Python `db_insert.py` via `child_process`
-- [ ] `ImportPage`: file picker, bank selector (BP / C24), upload button, result feedback
-- [ ] Transactions table → mobile card list (`useIsMobile()` hook, same pattern as portfolio)
-- [ ] Category dropdown usable on mobile (native `<select>` or bottom sheet)
-- [ ] Overview readable on small screen
-- [ ] Test on real device
+**6 done when:** both account balances reconcile to €0.00 delta against a real statement —
+or the delta is explained.
 
-**Learning outcome:** file upload in Express, `child_process` Python interop, responsive Tailwind layout.
+**Learning outcome:** SQL aggregation via Knex, `GROUP BY` with conditional exclusion, derived
+data in React without extra state, and the difference between "the numbers add up" and "the
+numbers are complete".
 
-### Phase 8 — CI/CD + deploy
-**Layer:** Full-stack / DevOps · **Stack:** GitHub Actions, Docker, Railway, Vercel · **Estimate:** half day
+### Phase 8b — CI/CD + ship v1.0.0
+**Layer:** DevOps · **Stack:** GitHub Actions, Railway, Vercel · **Estimate:** 1.75 sessions · **Week 5**
 
-*Ship it. Same pipeline CREA will use — but CREA is rewired by hand from what's learned here, not extracted as an automated template.*
+*8a made it live by hand. 8b makes it automatic and tags the release.*
 
-- [ ] GitHub Actions: lint → test (sample data) → Docker build → deploy to Railway
-- [ ] PostgreSQL on Railway
-- [ ] Frontend on Vercel — connect repo, set `VITE_API_URL`
-- [ ] All secrets in Railway + Vercel dashboards — never in repo
-- [ ] Smoke test on production: import sample → categorize → overview
+- [ ] GitHub Actions: lint → frontend tests (Vitest) → backend tests (Supertest) against a **Postgres service container**, running migrations against it first and using the sample fixtures only
+- [ ] On green `main`: auto-deploy → Railway (backend) + Vercel (frontend)
+- [ ] Confirm no real transaction data ever appears in Actions logs
+- [ ] Production smoke test: log in → transactions load → categorize one → overview totals update → reconciliation shows €0.00 delta
+- [ ] README: screenshots, stack, "real bank files not included — use your own or the sample fixtures"
 - [ ] Tag `v1.0.0`
 
-**Learning outcome:** full CI/CD, environment management across two platforms.
+**Learning outcome:** a full CI/CD pipeline with an ephemeral database service — the single
+most transferable thing in this repo, and the piece CREA forks verbatim.
+
+---
+
+## 5b. Post-launch backlog
+
+*Everything below ships as an update to the already-running app. No phase here blocks `v1.0.0`.*
+
+### Phase 7 — Mobile + file import from UI
+**Layer:** Full-stack · **Stack:** Express (multer, child_process), React (responsive Tailwind) · **Estimate:** 5 sessions
+
+*Makes the app usable on the phone, and removes the manual terminal step from importing.*
+
+- [ ] `POST /import` endpoint: file upload (multer), Node spawns Python `db_insert.py` via `child_process`
+- [ ] `ImportPage`: file picker **+ drag-and-drop** (`onDragOver` / `onDrop` + `e.dataTransfer.files` — ~20 lines on top of the picker), bank selector (BP / C24)
+- [ ] Import result feedback surfaces the dedupe counts from the `imports` row: `"312 rows · 47 new · 265 duplicates skipped"`
+- [ ] Transactions table → mobile card list (`useIsMobile()` hook, same pattern as portfolio)
+- [ ] Category dropdown usable on mobile (native `<select>` or bottom sheet)
+- [ ] Overview + reconciliation readable on a small screen
+- [ ] Test on a real device
+
+**Learning outcome:** file upload in Express, `child_process` Python interop (watch the venv
+and path handling inside Docker), responsive Tailwind layout.
+
+---
+
+### Phase 9 — Recurring / subscription detection
+**Layer:** Full-stack · **Stack:** Knex, SQL, React · **Estimate:** 3 sessions
+
+- [ ] Migration: `recurring_series` (id, account_id, normalized_name, expected_amount, cadence_days, last_seen_date, next_expected_date, is_active, category_id) + `transactions.recurring_series_id`
+- [ ] Detection service: group by `normalized_name` with amounts within ±5%, compute date deltas, flag anything with ≥3 occurrences at a stable cadence
+- [ ] Backfill `transactions.recurring_series_id`
+- [ ] Dashboard panel: "Fixed costs: €X/month", listed
+- [ ] Flag a series where `next_expected_date` has passed with no matching transaction — either it was cancelled, or the import is incomplete
+
+---
+
+### Phase 10 — AI categorizer
+**Layer:** Full-stack · **Stack:** Anthropic API (Haiku 4.5), Express, React · **Estimate:** 4.5 sessions
+
+*Sits on top of the rules engine, never replaces it. Rules are free, deterministic and instant;
+the AI only sees what the rules missed.*
+
+- [ ] Endpoint touches only rows where `category_id IS NULL` after rules have run
+- [ ] Batch by **distinct `normalized_name`**, ~50 per call — you are classifying payees, not rows. ~900 uncategorized transactions collapse to ~200 distinct names.
+- [ ] Structured output → `{ normalized_name, category, confidence }`, written as `category_source = 'ai'`, `category_confidence = <n>`, `category_confirmed_at = NULL`
+- [ ] Review UI: AI rows render with the same "unconfirmed" treatment built in Phase 5, plus the confidence value. Per-row accept / edit, plus **"Validate all above 0.85"** as a bulk action → `PATCH /transactions/confirm { ids: [...] }`
+- [ ] Accepting a suggestion keeps `category_source = 'ai'` and only sets `confirmed_at` — that's what makes "how often was the AI right?" answerable later
+- [ ] Cost guard: cap the rows sent per run, log token usage
+
+Cost at this data volume is a few cents, one-time. Not a factor in the design.
+
+---
+
+### v2 backlog — not scoped, not scheduled
+
+| Feature | Note |
+|---|---|
+| **Steuer page** | Werkstudent tax view. Cheap architecturally: a `category_id → steuer_bucket` mapping table + a year filter, reusing Phase 6's aggregation. Needs receipts/export to be genuinely useful. |
+| **Settings page** | Runtime config for accounts, categories, rules — currently all `.env` + direct SQL |
+| **PSD2 / direct bank sync** | GoCardless Bank Account Data. Biggest scope by far: consent flow, mandatory 90-day re-authorization, token storage, a sync job, and dedupe against manual imports. A whole phase of its own. |
+| **Split transactions** | One €80 supermarket run = €60 food + €20 household. Needs a `transaction_splits` table, and **every aggregation query changes** — the one deferred item with a real retrofit cost. |
+| **Receipt attachments** | Feeds the Steuer page (German tax wants Belege). Reuses Phase 7's upload. |
+| **CSV / PDF export** | Trivial, and what makes the Steuer page actually usable |
+| **Budgets + alerts** | Explicitly rejected for now — this is a tracker, not a planner |
+| **Multi-currency** | Not needed. EUR/EUR. |
 
 ---
 
@@ -1982,9 +2352,19 @@ Want to write that test file next, one case at a time the way you did for transa
 
 ---
 
-## 9. Remaining work (as of 2026-06-24)
+## 9. Remaining work (as of 2026-08-10)
 
-1. Start Phase 1 — React fundamentals sprint (`npm create vite@latest` inside `frontend/`)
-2. Create repo `unifin` on GitHub (can happen alongside Phase 1/2, formalized in Phase 3)
-3. Create synthetic sample fixtures (`data/sample/sample_bp.tsv`, `data/sample/sample_c24.csv`) — needed by Phase 4
-4. Python ETL called via `child_process` — confirmed, lands in Phase 7
+**Done:** Phases 1 (1a/1b/1c) and 2 (2a/2b). Repo created, `.gitignore` confirmed, Docker Compose
+running, Knex wired, transactions CRUD, JWT auth end to end, 24 Vitest/RTL tests + Cypress e2e.
+
+**Next, in order — see §5.0 for the full schedule:**
+
+1. **Week 1** — Phase 3 (`/health`, Vite proxy, `<RequireAuth>`, logout) · migrations M1–M4 · **create the sample fixtures** (still missing, blocks Phase 4 and CI)
+2. **Week 1, offline** — look up the real opening balance + date for BP and C24 from a statement (needed by `accounts`, and by Phase 6's reconciliation)
+3. **Week 2** — seed accounts/categories/rules · `db_insert.py` rewrite with normalize + hash + seq · verify on sample then real · start Railway
+4. **Week 3** — Phase 8a: live on Railway + Vercel · Phase 5 `GET /transactions` + table
+5. **Week 4** — Phase 5: inline category PATCH, uncategorized filter, search · start Phase 6 aggregation
+6. **Week 5** — Phase 6: balance cards, reconciliation view, transfer exclusion · Phase 8b: Actions pipeline, smoke test, **tag `v1.0.0`**
+
+Then: Phase 7 (mobile + import UI) → Phase 9 (recurring) → Phase 10 (AI categorizer), each
+deployed as an update to the running app.

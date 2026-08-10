@@ -92,9 +92,13 @@ first via one round of questions — then build. Don't start coding on assumptio
 ## Current phase
 
 See `PLAN_unifin.md` for the full phased plan. Always check which phase is active before starting a task.
-Build order: Phase 1 → 2 → 3 → 4 → 5 → 6 → 7.
 
-**Current status: Phase 1 not started.**
+**Build order (locked 2026-08-10): Phase 3 → 4 → 8a → 5 → 6 → 8b → `v1.0.0`.**
+Note the deploy split: 8a puts the app live in week 3, when it's still small.
+Phases 7 (mobile), 9 (recurring) and 10 (AI categorizer) are post-launch, shipped as updates.
+
+**Current status: Phases 1 and 2 complete (frontend shell + routing + tests, Docker, Knex,
+Express CRUD, JWT auth). Phase 3 next. Target: deployed `v1.0.0` by mid-September 2026.**
 
 ## Project structure (target)
 

@@ -1,43 +1,60 @@
 /* Unifin — design tokens
-   Palette derived from the sunrise reference: black/beige base,
-   cobalt + orange highlights, green/red semantic pairs for dashboards.
+   Palette: cool grey neutrals + a single blue for everything interactive.
+   Yellow is reserved for "needs review". Green/red are reserved for money.
+
+   Colour discipline — the whole system in four rules:
+     1. BLUE   = interactive + selected. Buttons, links, focus rings, the "net" bar.
+     2. GREY   = structure. Surfaces, borders, muted text, chips, table chrome.
+     3. YELLOW = "needs your attention, not an error." Uncategorized rows,
+                 unconfirmed categories, non-zero reconciliation deltas,
+                 AI suggestions (Phase 10). Fill and border only — never small text.
+     4. GREEN / RED = money only. Transaction amounts, income/expense totals and bars.
+                 Never used for UI state, or they stop meaning "income" and "expense".
+
    Declared inside @theme so Tailwind generates utilities (bg-primary, text-ink, ...).
 */
 @theme {
-  /* --- Neutral base (use for most surfaces) --- */
-  --color-bg: #f0e7d3; /* page background · beige */
-  --color-surface: #fbf6ec; /* cards, panels · off-white */
-  --color-surface-alt: #fdfbf4;
-  --color-ink: #17130e; /* primary text · near-black */
+  /* --- Neutral base · cool grey ------------------------------------------ */
+  --color-bg: #f4f6f8; /* page background */
+  --color-surface: #ffffff; /* cards, panels, table rows */
+  --color-surface-alt: #eef1f5; /* zebra rows, table headers, muted panels */
+  --color-ink: #0f1720; /* primary text · near-black, blue cast */
+  --color-ink-muted: #5c6b7a; /* dates, labels, secondary text (5.5:1 on surface) */
   --color-white: #ffffff;
-  --color-border: #e1d5bc;
+  --color-border: #dde3ea;
+  --color-border-strong: #c3cdd8; /* table dividers, input borders */
 
-  /* --- Strong highlights --- */
-  --color-primary: #1a3aa0; /* cobalt · primary actions */
-  --color-primary-hover: #12297a;
-  --color-secondary: #e07c2a; /* sun orange · tags, icons, fills (NOT small text) */
-  --color-secondary-hover: #c4661a;
-  --color-accent: #f2b705; /* gold · sparing accent */
+  /* --- Primary · blue · everything interactive --------------------------- */
+  --color-primary: #1a56db; /* 6.1:1 on white — safe for text and buttons */
+  --color-primary-hover: #1441ad;
+  --color-primary-soft: #e8effc; /* selected row, active filter chip */
+  --color-primary-text: #14367f; /* text on primary-soft */
+
+  /* --- Secondary · slate · category chips, neutral tags ------------------ */
+  --color-secondary: #4a5b6e; /* 7.0:1 on white */
+  --color-secondary-hover: #3a4857;
+  --color-secondary-soft: #eaeef2;
+
+  /* --- Accent · yellow · "needs review" ONLY ----------------------------- */
+  /* Low contrast by nature: use as fill/border/dot, never as small text. */
+  --color-accent: #f2b705;
   --color-accent-hover: #d8a203;
+  --color-accent-soft: #fdf3d4; /* uncategorized row tint, pending badge fill */
+  --color-accent-text: #7a5c00; /* the text colour to pair with accent-soft */
 
-  /* --- Dashboard: income (green) --- */
-  --color-income: #3f7a2a;
-  --color-income-hover: #316021;
-  --color-income-soft: #e6efda; /* soft row/chip fill */
-  --color-income-text: #2c5518; /* text on income-soft */
+  /* --- Money: income (green) · transactions and totals only -------------- */
+  --color-income: #157f3d; /* 5.1:1 on white */
+  --color-income-hover: #10632f;
+  --color-income-soft: #e3f3e9;
+  --color-income-text: #0e5c2c;
 
-  /* --- Dashboard: expense (red) --- */
-  --color-expense: #b23a2c;
-  --color-expense-hover: #8f2c20;
-  --color-expense-soft: #f6e2dc; /* soft row/chip fill */
-  --color-expense-text: #79241a; /* text on expense-soft */
+  /* --- Money: expense (red) · transactions and totals only --------------- */
+  --color-expense: #c02b2b; /* 5.8:1 on white */
+  --color-expense-hover: #9c2020;
+  --color-expense-soft: #fbe6e6;
+  --color-expense-text: #8f1f1f;
 
-  /* --- Punchier variants (swap in if the muted greens/reds feel weak) ---
-     --color-income: #2E8B1F;
-     --color-expense: #C9372A;
-  */
-
-  /* --- Shared tokens --- */
+  /* --- Shared tokens ----------------------------------------------------- */
   --radius-DEFAULT: 8px;
   --radius-card: 12px;
   --radius-shell: 16px;
