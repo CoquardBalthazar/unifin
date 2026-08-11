@@ -17,7 +17,7 @@ services:
       retries: 5
 
   app:
-    build: ./backend:/app
+    build: ./backend
     restart: unless-stopped
     ports:
       - "4000:4000"

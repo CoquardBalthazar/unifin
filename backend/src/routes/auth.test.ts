@@ -18,10 +18,10 @@ beforeAll(() => {
 });
 
 // Test Login
-describe("POST /api/auth/login/", () => {
+describe("POST /api/auth/login", () => {
   test("Valid email + Valid Password -> 200 and a token", async () => {
     const res = await request(app)
-      .post("/api/auth/login/")
+      .post("/api/auth/login")
       .send({ email: TEST_EMAIL, password: TEST_PASSWORD });
 
     expect(res.status).toBe(200);

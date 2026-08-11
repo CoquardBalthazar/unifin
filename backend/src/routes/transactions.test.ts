@@ -1,9 +1,34 @@
 import request from "supertest";
+import jwt from "jsonwebtoken";
+
 import { app } from "../index.js";
 import { db } from "../db/knex.js";
-import { describe, test, expect, beforeEach, afterAll } from "vitest";
+import {
+  describe,
+  test,
+  expect,
+  beforeEach,
+  beforeAll,
+  afterAll,
+} from "vitest";
 
-// Change the db to test-db when in production
+// /api/transactions sits behind requireAuth = valid token is required
+// request needs a valid token. We sign one directly rather than calling
+// POST /api/auth/login — this file tests transactions, not login.
+let bearer: string;
+
+beforeAll(() => {
+  const token = jwt.sign(
+    { sub: "test@unifin.local" },
+    process.env.JWT_SECRET!,
+    {
+      expiresIn: "1h",
+    },
+  );
+  bearer = `Bearer ${token}`;
+});
+
+// NOTES : Change the db to test-db when in production
 // Practical implication worth flagging clearly: because this
 // hits your real dev database, running the test suite wipes
 // out any real data you've manually inserted
@@ -20,7 +45,9 @@ afterAll(async () => {
 
 describe("Integration Test - api/transactions", () => {
   test("GET /api/transactions returns 200 and an empty array", async () => {
-    const res = await request(app).get("/api/transactions");
+    const res = await request(app)
+      .get("/api/transactions")
+      .set("Authorization", bearer);
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
   });
@@ -28,12 +55,15 @@ describe("Integration Test - api/transactions", () => {
   test("POST /api/transactions with missing fields returns 400", async () => {
     const res = await request(app)
       .post("/api/transactions")
+      .set("Authorization", bearer)
       .send({ date: "2026-07-27" });
     expect(res.status).toBe(400);
   });
 
   test("GET /api/transactions/:id returns 404 for unknown id", async () => {
-    const res = await request(app).get("/api/transactions/9999");
+    const res = await request(app)
+      .get("/api/transactions/9999")
+      .set("Authorization", bearer);
     expect(res.status).toBe(404);
   });
   //   It's chainable, and returns a real response object you assert on, same shape as res on the server side:
