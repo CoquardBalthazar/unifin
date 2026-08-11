@@ -1,24 +1,20 @@
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 
-// Mock the router
-import { MemoryRouter } from "react-router-dom";
+// Test utils fro rendering
+import { renderWithProviders } from "../test-utils";
 
 import { NavBar } from "./NavBar";
 
 describe("NavBar", () => {
   it("marks the current route as active", () => {
-    render(
-      <MemoryRouter initialEntries={["/transactions"]}>
-        <NavBar />
-      </MemoryRouter>,
-    );
+    renderWithProviders(<NavBar />, { route: "/transactions" });
 
     expect(screen.getByRole("link", { name: "Transactions" })).toHaveAttribute(
       "aria-current",
       "page",
     );
-    expect(screen.getByRole("link", { name: "Home" })).not.toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Dashboard" })).not.toHaveAttribute(
       "aria-current",
     );
   });
