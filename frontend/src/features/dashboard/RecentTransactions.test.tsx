@@ -6,6 +6,14 @@ import { fetchTransactions } from "../../api/transactions";
 
 import { RecentTransactions } from "./RecentTransactions";
 
+// The component compares against new Date(), so fixtures must be relative
+// to today. A hardcoded date silently expires and fails weeks later.
+function daysAgo(n: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.toISOString().slice(0, 10); // "YYYY-MM-DD"
+}
+
 // Mock API locations
 vi.mock("../../api/transactions");
 
@@ -22,7 +30,7 @@ describe("RecentTransactions", () => {
         id: "t1",
         label: "Salary",
         amount: 1600,
-        date: "2026-07-26",
+        date: daysAgo(1),
         category: "income",
       },
     ]);
@@ -37,10 +45,11 @@ describe("RecentTransactions", () => {
         id: "t1",
         label: "Old rent",
         amount: -890,
-        date: "2020-01-01",
+        date: daysAgo(400),
         category: "Housing",
       },
     ]);
+
     render(<RecentTransactions />);
 
     expect(
@@ -52,11 +61,8 @@ describe("RecentTransactions", () => {
     vi.mocked(fetchTransactions).mockRejectedValue(new Error("network down"));
     render(<RecentTransactions />);
 
-    // Component sets an `error` state on rejection but never renders it —
-    // it just falls through to "recents.length > 0 ? ... : <no transactions>"
-    // with an empty transactions array. Documents current behavior.
     expect(
-      await screen.findByText("No transactions in the last 10 days."),
+      await screen.findByText("Could not load transactions"),
     ).toBeInTheDocument();
   });
 });

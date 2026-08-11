@@ -21,14 +21,6 @@ export function SummaryBar({ transactions }: Props) {
     return { income, expenses, net: income - expenses };
   }, [transactions]); // dependency array : each change call the functions, no change computed is cached
 
-  function totalIncome(transactions: Transactions[]) {
-    let total: number = 0;
-    transactions.map((t) => {
-      if (t.amount > 0) {
-        total += t.amount;
-      }
-    });
-  }
   return (
     <div className="summary-bar">
       <span>

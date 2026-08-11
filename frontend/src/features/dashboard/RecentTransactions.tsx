@@ -20,6 +20,10 @@ function isWithinLastDays(dateStr: string, days: number): boolean {
   cutoff.setDate(cutoff.getDate() - days);
   return new Date(dateStr) >= cutoff;
 }
+
+// CONST
+const RECENT_DAYS = 10;
+
 export function RecentTransactions() {
   // useState
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -49,15 +53,20 @@ export function RecentTransactions() {
   }, []); // no dependencies
 
   if (isLoading) return <p className="muted">Loading…</p>;
+  if (error) return <p className="muted">{error}</p>;
 
-  const recents = transactions.filter((t) => isWithinLastDays(t.date, 3));
+  const recents = transactions.filter((t) =>
+    isWithinLastDays(t.date, RECENT_DAYS),
+  );
   return (
     <section>
-      <h2 className="text-lg font-semibold text-ink mb-2">Last 10 days</h2>
+      <h2 className="text-lg font-semibold text-ink mb-2">
+        Last {RECENT_DAYS} days
+      </h2>
       {recents.length > 0 ? (
         <TransactionList transactions={recents} onDelete={() => {}} />
       ) : (
-        <p className="muted">No transactions in the last 10 days.</p>
+        <p className="muted">No transactions in the last {RECENT_DAYS} days.</p>
       )}
     </section>
   );

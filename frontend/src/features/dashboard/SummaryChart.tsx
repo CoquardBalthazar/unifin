@@ -35,6 +35,9 @@ export function SummaryChart() {
     }; // cleanup
   }, []); // no dependencies
 
+  //   Error handling
+  if (error) return <p className="muted">{error}</p>;
+
   // Compute values
   const income = transactions
     .filter((t) => t.amount > 0)

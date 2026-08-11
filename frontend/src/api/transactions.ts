@@ -32,7 +32,7 @@ export const MOCK = [
 ];
 
 export function fetchTransactions(): Promise<Transaction[]> {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     setTimeout(() => {
       resolve(MOCK);
     }, 800);
