@@ -1,19 +1,16 @@
-import { useState } from "react";
+import { useContext } from "react";
+import { AuthContext } from "../context/AuthContext";
 
-// Same useState pattern as TransactionsPage — one hook, one piece of
-// state (isLoggedIn), reused everywhere auth status matters.
+// No state here - comes from the context
+// This hook is a thin typed reader of the single state owned by AuthProvider
 export function useAuth() {
-  const [isLoggedIn, setIsLoggedIn] = useState(
-    () => !!localStorage.getItem("token"),
-  );
+  const value = useContext(AuthContext);
 
-  function markLoggedIn() {
-    setIsLoggedIn(true);
-  }
-  function markLoggedOut() {
-    localStorage.removeItem("token");
-    setIsLoggedIn(false);
+  //  Guard : avoid and fail loudly if reading the context outside <AuthProvider>, which
+  // returns the `null` default.
+  if (!value) {
+    throw new Error("useAuth must be used inside <AuthProvider>");
   }
 
-  return { isLoggedIn, markLoggedIn, markLoggedOut };
+  return value;
 }

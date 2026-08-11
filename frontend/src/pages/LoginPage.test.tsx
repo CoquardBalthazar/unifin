@@ -1,7 +1,8 @@
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
 import { vi, it, describe, expect, beforeEach } from "vitest";
+import { renderWithProviders } from "../test-utils";
+
 import { LoginPage } from "./LoginPage";
 import * as authApi from "../api/auth";
 
