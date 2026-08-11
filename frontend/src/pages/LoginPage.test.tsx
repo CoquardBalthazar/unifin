@@ -20,18 +20,12 @@ describe("LoginPage", () => {
     // Mock Success : return Token using "mockResolvedValue"
     vi.mocked(authApi.login).mockResolvedValue("fake-token");
 
-    render(
-      <MemoryRouter>
-        <LoginPage />
-      </MemoryRouter>,
-    );
+    renderWithProviders(<LoginPage />);
 
     // --- Act ---
-    await userEvent.type(
-      screen.getByPlaceholderText("Email"),
-      "me@example.com",
-    );
-    await userEvent.type(screen.getByPlaceholderText("Password"), "hunter2");
+    await userEvent.type(screen.getByLabelText("Email"), "me@example.com");
+    await userEvent.type(screen.getByLabelText("Password"), "hunter2");
+
     await userEvent.click(screen.getByRole("button", { name: "Log in" }));
 
     // --- Assert ---
@@ -42,21 +36,15 @@ describe("LoginPage", () => {
     // --- Arrange ---
     // Mock Failure : return Token using "mockResolvedValue"
     vi.mocked(authApi.login).mockRejectedValue(
-      new Error("Invalid credentials"),
+      new Error("INVALID_CREDENTIALS"),
     );
 
-    render(
-      <MemoryRouter>
-        <LoginPage />
-      </MemoryRouter>,
-    );
+    renderWithProviders(<LoginPage />);
 
     // --- Act ---
-    await userEvent.type(
-      screen.getByPlaceholderText("Email"),
-      "me@example.com",
-    );
-    await userEvent.type(screen.getByPlaceholderText("Password"), "wrong");
+    await userEvent.type(screen.getByLabelText("Email"), "me@example.com");
+    await userEvent.type(screen.getByLabelText("Password"), "wrong");
+
     await userEvent.click(screen.getByRole("button", { name: "Log in" }));
 
     // --- Assert ---

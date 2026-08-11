@@ -1,3 +1,9 @@
 @import "tailwindcss";
 @import "./tokens/colors.css";
 @import "./tokens/typography.css";
+
+/* App-wide page background. Must come AFTER the token import —
+   --color-bg doesn't exist until colors.css has been read. */
+body {
+  background-color: var(--color-bg);
+}
