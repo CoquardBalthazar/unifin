@@ -5,7 +5,12 @@ export async function login(email: string, password: string): Promise<string> {
     body: JSON.stringify({ email, password }),
   });
 
-  if (!res.ok) throw new Error("Invalid credentials");
+  if (!res.ok) {
+    // 401 is the only status that actually means "credentials rejected".
+    // Everything else is an infrastructure problem and must say so.
+    if (res.status === 401) throw new Error("INVALID_CREDENTIALS");
+    throw new Error(`Login failed: ${res.status} ${res.statusText}`);
+  }
 
   const { token } = await res.json();
 
