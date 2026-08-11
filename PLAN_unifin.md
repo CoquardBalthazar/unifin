@@ -191,19 +191,19 @@ Three reasons, in order:
 
 | # | Phase | Sessions | Delivers |
 |---|---|---|---|
-| **3** | Skeleton hardening *(trimmed)* | 1.5 | `RequireAuth`, `GET /health`, Vite proxy → backend |
+| **3** | Skeleton hardening | 2 | `AuthContext`, `RequireAuth` + logout, `GET /health`, Vite proxy → backend |
 | **4** | Schema + ETL + **duplicate detection** | 3.5 | 4 migrations, accounts seeded, `db_insert.py` writes real BP+C24 rows, duplicates rejected |
 | **8a** | **Deploy early** | 2 | Railway (backend + Postgres), Vercel (frontend), secrets, prod migrations → **live URL** |
 | **5** | Transactions UI + manual categorization | 3 | Both banks in one table, inline category dropdown, uncategorized filter, search |
 | **6** | Overview + balances + reconciliation | 4.5 | Yearly category totals, transfer exclusion, per-account balance cards, reconciliation view |
 | **8b** | CI/CD + ship | 1.75 | GitHub Actions (lint → test w/ Postgres service → auto-deploy), prod smoke test, tag `v1.0.0` |
-| | | **16.25** | |
+| | | **16.75** | |
 
 #### Week by week
 
 | Week | Dates | Sessions | Work |
 |---|---|---|---|
-| 1 | Aug 11–17 | 2.75 | Phase 3 complete · migrations M1–M4 written and run · **sample fixtures created** |
+| 1 | Aug 11–17 | 3.25 | Phase 3 complete (3a → 3b → 3c) · migrations M1–M4 written and run · **sample fixtures created** |
 | 2 | Aug 18–24 | 3.25 | Seed accounts + categories · `db_insert.py` rewrite (normalize + hash + seq) · verify vs sample, then real · start Railway |
 | 3 | Aug 25–31 | 3.25 | **Railway + Vercel live** · `GET /transactions` filtered · table rendering real data |
 | 4 | Sep 1–7 | 3.5 | Inline category PATCH · uncategorized filter · search · start overview aggregation |
@@ -213,7 +213,7 @@ Three reasons, in order:
 
 | Cut | Was in | Saves | Why it's safe |
 |---|---|---|---|
-| `useAuth` → Context provider | Phase 3 | 0.75 | The existing hook works. Prop-drill until it hurts. |
+| ~~`useAuth` → Context provider~~ | ~~Phase 3~~ | ~~0.75~~ | **Un-cut 2026-08-11 — the cut was based on a wrong premise.** The 2b hook is a state *factory*, not a store: every caller gets its own `useState`. With one caller (`LoginPage`) that is invisible; Phase 3 adds `<RequireAuth>` and `NavBar`, and then `markLoggedIn()` updates a copy nobody else reads. Context is the fix, not an upgrade. Cost stays ~0.75, moved into 3a. |
 | CI as its own phase | Phase 3 | 1.0 | Merged into 8b, where the deploy pipeline lives anyway |
 | Rules **learning-loop UI** | Phase 5 | 1.0 | The substring *matcher* stays (~15 lines of Python in the ETL) — that's the labour saver. Only the in-app "always categorize this as X" button is deferred; edit the `category_rules` table directly for now. |
 | Pagination | Phase 5 | 0.5 | ~1000 rows. Send them all. |
@@ -1975,25 +1975,614 @@ DONE
 
 **Learning outcome:** Docker Compose with a real healthcheck/depends_on chain, Knex migrations end-to-end, Express routing + middleware, bcrypt/JWT auth internals (including the timing-safety caveat), protected routes, and wiring frontend auth to a real API.
 
-### Phase 3 — Skeleton hardening (trimmed)
-**Layer:** Full-stack · **Stack:** React Router, Express · **Estimate:** 1.5 sessions · **Week 1**
+### Phase 3 — Skeleton hardening
+**Layer:** Full-stack · **Stack:** React Context, React Router, Express, Knex, Vite · **Estimate:** 2 sessions · **Week 1**
+**Branch:** `feature/phase3-skeleton-hardening`
 
 *Docker Compose + Knex + the login flow already exist as of Phase 2a/2b. Repo creation and
-`.gitignore` are done. CI moved to Phase 8b, where the deploy pipeline lives. React Context
-is cut — the `useAuth` hook from 2b is good enough until it hurts.*
+`.gitignore` are done. CI moved to Phase 8b, where the deploy pipeline lives.*
+
+*Scope change (2026-08-11): React Context is back in, as sub-phase 3a. The earlier cut assumed
+"the existing hook works" — it does not, once more than one component calls it. See the
+un-cut row in the "Cut from v1" table for the reasoning. Everything else in this phase
+depends on 3a, so it goes first.*
 
 - [ ] ~~Create repo `unifin` on GitHub~~ — **done**
 - [ ] ~~`.gitignore`: `data/real/`, `backend/.env`, `frontend/.env`, `CLAUDE.local.md`~~ — **done**
-- [ ] `GET /health` route, no auth required (used by Railway healthcheck + CI). Returns `{ status: 'ok', db: 'ok' }` — hit Postgres with a `SELECT 1` so it actually proves the DB link, not just that Node is alive.
-- [ ] Vite dev-server proxy `/api` → `http://localhost:4000`, so the frontend's relative `fetch('/api/...')` calls work in dev without CORS config
-- [ ] Protected route wrapper `<RequireAuth>` around `/` and `/transactions` — reads `useAuth().isLoggedIn`, `<Navigate to="/login" replace />` when false
-- [ ] Logout button in `NavBar` → `markLoggedOut()` → redirect to `/login`
+- [ ] **3a** — `AuthContext` + `AuthProvider`, `useAuth()` reads from it
+- [ ] **3b** — `<RequireAuth>` wrapper around `/` and `/transactions` · logout button in `NavBar`
+- [ ] **3c** — Vite dev-server proxy `/api` → `:4000` · `GET /health` with a real `SELECT 1`
 - [ ] Confirm the full loop end to end: login → protected page → refresh (token survives) → logout → bounced to `/login`
 
-**Deferred:** `useAuth` → Context provider. Revisit when more than ~3 components need `isLoggedIn`.
+**Build order is not optional here:** 3b's `<RequireAuth>` reads the shared state 3a creates.
+Building 3b first produces a redirect loop that looks like a routing bug and is not one.
 
-**Learning outcome:** the protected-route pattern, dev-server proxying, and a healthcheck
-endpoint that means something — all three carry straight into CREA.
+---
+
+#### Phase 3a — `AuthContext`: one shared piece of auth state
+
+**The bug this fixes**
+
+```
+Today (Phase 2b hook)                    After 3a (Context)
+
+LoginPage    → useAuth() → useState A    LoginPage    ─┐
+RequireAuth  → useAuth() → useState B    RequireAuth  ─┼→ useContext → ONE useState
+NavBar       → useAuth() → useState C    NavBar       ─┘    (owned by AuthProvider)
+
+markLoggedIn() sets A.                   markLoggedIn() sets the one state.
+B and C never hear about it.             Every consumer re-renders.
+```
+
+`useAuth()` as written in 2b calls `useState` *inside itself*. A custom hook is just a
+function — calling it three times runs `useState` three times and creates three independent
+states. Hooks share **logic**, never **state**. Context is React's answer to "these components
+need the same value": one component owns the state, everything below it in the tree reads it.
+
+Python analogy: the 2b hook is a factory function that returns a fresh object per call.
+Context is the module-level singleton everyone imports.
+
+**Structure — new/changed files**
+
+```
+frontend/src/
+├── context/
+│   └── AuthContext.tsx      # new — createContext + AuthProvider (owns the state)
+├── hooks/
+│   └── useAuth.ts           # rewritten — useContext, no useState left
+├── main.tsx                 # wraps <App/> in <AuthProvider>
+└── pages/LoginPage.tsx      # unchanged — same useAuth() call, now reads shared state
+```
+
+---
+
+##### `frontend/src/context/AuthContext.tsx` (new)
+
+```tsx
+import { createContext, useState, type ReactNode } from "react";
+
+// The shape every consumer gets back. Exported so useAuth can type its return.
+export type AuthValue = {
+  isLoggedIn: boolean;
+  markLoggedIn: () => void;
+  markLoggedOut: () => void;
+};
+
+// createContext makes the "channel". `null` is the default, used only when a
+// component reads the context with no Provider above it — which is a bug, so
+// useAuth throws on it rather than silently returning a broken default.
+export const AuthContext = createContext<AuthValue | null>(null);
+
+// The Provider component OWNS the state. This is the only useState for auth
+// in the whole app — the exact line that was duplicated per-caller before.
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [isLoggedIn, setIsLoggedIn] = useState(
+    () => !!localStorage.getItem("token"),
+  );
+
+  function markLoggedIn() {
+    setIsLoggedIn(true);
+  }
+
+  function markLoggedOut() {
+    localStorage.removeItem("token");
+    setIsLoggedIn(false);
+  }
+
+  return (
+    <AuthContext value={{ isLoggedIn, markLoggedIn, markLoggedOut }}>
+      {children}
+    </AuthContext>
+  );
+}
+```
+
+Three things worth internalizing:
+
+1. **`useState(() => ...)` — the lazy initializer.** The arrow function form runs
+   `localStorage.getItem` *once*, on first render only. `useState(!!localStorage.getItem(...))`
+   without the arrow reads localStorage on every single render and throws the result away.
+   Carried over from 2b; still correct.
+2. **`children` + `ReactNode`.** `AuthProvider` wraps arbitrary JSX, so its `children` prop
+   is typed `ReactNode` — the "anything React can render" type already in your concept box.
+3. **`<AuthContext value={...}>` with no `.Provider`.** React 19 (you're on 19.2) lets the
+   context object be used directly as the provider component. Every tutorial written before
+   2024 says `<AuthContext.Provider value={...}>` — that still works, it's the old spelling
+   of the same thing.
+
+---
+
+##### `frontend/src/hooks/useAuth.ts` (rewritten)
+
+```ts
+import { useContext } from "react";
+import { AuthContext } from "../context/AuthContext";
+
+// No useState here anymore. This hook is now a thin, typed reader of the
+// single state owned by AuthProvider.
+export function useAuth() {
+  const value = useContext(AuthContext);
+
+  // Guard: reading the context outside <AuthProvider> returns the `null`
+  // default. Without this throw you'd get "cannot destructure property
+  // 'isLoggedIn' of null" somewhere deep in a component — this fails loudly
+  // at the actual cause instead.
+  if (!value) {
+    throw new Error("useAuth must be used inside <AuthProvider>");
+  }
+
+  return value;
+}
+```
+
+The call sites do not change — `const { markLoggedIn } = useAuth();` in `LoginPage` still reads
+identically. That's the point of keeping the hook as the public API instead of having components
+call `useContext(AuthContext)` directly: the storage mechanism swapped underneath and nothing else
+had to be touched.
+
+---
+
+##### `frontend/src/main.tsx` (updated)
+
+```tsx
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import { BrowserRouter } from "react-router-dom";
+
+import "./styles/index.css";
+import App from "./App.tsx";
+import { AuthProvider } from "./context/AuthContext";
+
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <AuthProvider>
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>
+    </AuthProvider>
+  </StrictMode>,
+);
+```
+
+`AuthProvider` goes **outside** `BrowserRouter`: auth state is not route-specific, and this
+ordering means a future `<RequireAuth>` anywhere in the route tree is guaranteed to have a
+provider above it. Anything *inside* the provider can call `useAuth()`; anything outside cannot.
+
+---
+
+##### `frontend/src/context/AuthContext.test.tsx` (new)
+
+The one test that would have caught the original bug — two separate components reading the same
+state:
+
+```tsx
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { AuthProvider } from "./AuthContext";
+import { useAuth } from "../hooks/useAuth";
+
+function Reader() {
+  const { isLoggedIn } = useAuth();
+  return <span>{isLoggedIn ? "in" : "out"}</span>;
+}
+
+function Toggler() {
+  const { markLoggedIn } = useAuth();
+  return <button onClick={markLoggedIn}>log in</button>;
+}
+
+test("state set by one consumer is visible to another", async () => {
+  render(
+    <AuthProvider>
+      <Reader />
+      <Toggler />
+    </AuthProvider>,
+  );
+
+  expect(screen.getByText("out")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: /log in/i }));
+  expect(screen.getByText("in")).toBeInTheDocument();   // ← fails against the 2b hook
+});
+```
+
+Run this against the old `useAuth` and it fails on the last line: `Toggler` sets its own copy,
+`Reader` still renders "out". That failure *is* the justification for this sub-phase.
+
+**3a done when:** the test above passes, `npm run dev` still logs in from `LoginPage`, and
+`grep -rn "useState" src/hooks/useAuth.ts` returns nothing.
+
+---
+
+#### Phase 3b — `<RequireAuth>` + logout
+
+**What it produces**
+
+```
+Browser hits /transactions
+        │
+        ▼
+   <RequireAuth>  ← reads useAuth().isLoggedIn (the shared one, from 3a)
+        │
+   logged in?──no──▶ <Navigate to="/login" replace />
+        │yes
+        ▼
+   <Outlet/> → TransactionPage renders
+
+NavBar "Log out" → markLoggedOut() → localStorage cleared + state false
+        │
+        ▼
+   RequireAuth re-renders, now false → bounced to /login (no navigate() call needed)
+```
+
+The redirect on logout is a *consequence* of the state change, not an explicit
+`navigate("/login")`. That's the declarative-routing mindset: you change state, and the route
+tree re-renders to match. This is the pattern CREA inherits verbatim.
+
+**Structure — new/changed files**
+
+```
+frontend/src/
+├── core/
+│   ├── RequireAuth.tsx      # new — the guard
+│   ├── RequireAuth.test.tsx # new
+│   ├── NavBar.tsx           # + logout button, hidden when logged out
+│   └── NavBar.test.tsx      # + logout cases
+└── App.tsx                  # routes regrouped under the guard
+```
+
+---
+
+##### `frontend/src/core/RequireAuth.tsx` (new)
+
+```tsx
+import { Navigate, Outlet } from "react-router-dom";
+import { useAuth } from "../hooks/useAuth";
+
+// A "layout route" component: it renders nothing of its own, it either
+// renders its matched child route (<Outlet/>) or redirects.
+export function RequireAuth() {
+  const { isLoggedIn } = useAuth();
+
+  // `replace` swaps the current history entry instead of pushing a new one.
+  // Without it, the browser Back button sends you to the protected URL you
+  // were just bounced off — which immediately bounces you again. Back button
+  // becomes useless.
+  if (!isLoggedIn) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return <Outlet />;
+}
+```
+
+`<Outlet />` is the same slot concept already in your concept box from Phase 1's routing work —
+here the layout component happens to have a condition in front of it. `<Navigate>` is the
+component form of `useNavigate()`: use the component when redirecting *during render*, the hook
+when redirecting *inside a handler* (as `LoginPage` does).
+
+---
+
+##### `frontend/src/App.tsx` (updated)
+
+```tsx
+import "./App.css";
+import { Routes, Route } from "react-router-dom";
+import { NavBar } from "./core/NavBar";
+import { RequireAuth } from "./core/RequireAuth";
+
+import { LoginPage } from "./pages/LoginPage";
+import { DashboardPage } from "./features/dashboard/DashboardPage";
+import { TransactionPage } from "./features/transactions/TransactionPage";
+
+function App() {
+  return (
+    <div>
+      <NavBar />
+      <Routes>
+        {/* public */}
+        <Route path="/login" element={<LoginPage />} />
+
+        {/* protected — a pathless parent route: it adds no URL segment,
+            it only wraps its children in the guard. Add future protected
+            routes here and they are covered for free. */}
+        <Route element={<RequireAuth />}>
+          <Route path="/" element={<DashboardPage />} />
+          <Route path="/transactions" element={<TransactionPage />} />
+        </Route>
+      </Routes>
+    </div>
+  );
+}
+
+export default App;
+```
+
+The **pathless route** (`<Route>` with `element` but no `path`) is the piece worth learning: it
+groups children under shared behaviour without touching the URLs. The alternative —
+`<RequireAuth><DashboardPage /></RequireAuth>` repeated per route — works but you must remember
+it on every new route, and one forgotten wrapper is an unprotected page.
+
+---
+
+##### `frontend/src/core/NavBar.tsx` (updated)
+
+```tsx
+// src/core/NavBar.tsx
+import { NavLink } from "react-router-dom";
+import { useAuth } from "../hooks/useAuth";
+
+const linkClass = ({ isActive }: { isActive: boolean }) =>
+  isActive
+    ? "font-bold underline text-white"
+    : "opacity-70 text-white hover:opacity-100";
+
+export function NavBar() {
+  const { isLoggedIn, markLoggedOut } = useAuth();
+
+  return (
+    <nav className="flex gap-4 p-4 bg-slate-800">
+      <NavLink to="/" end className={linkClass}>
+        Home
+      </NavLink>
+      <NavLink to="/transactions" className={linkClass}>
+        Transactions
+      </NavLink>
+
+      {/* ml-auto pushes this to the far right of the flex row — the Tailwind
+          idiom for "space between these and the rest", no float, no justify
+          juggling on the parent. */}
+      {isLoggedIn && (
+        <button
+          onClick={markLoggedOut}
+          className="ml-auto text-white opacity-70 hover:opacity-100"
+        >
+          Log out
+        </button>
+      )}
+    </nav>
+  );
+}
+```
+
+`{isLoggedIn && <button/>}` is safe here because `isLoggedIn` is a real boolean — `false` renders
+nothing. The concept-box warning about `&&` applies to *numbers* (`array.length && ...` renders a
+literal `0`), not booleans.
+
+Open question to decide while building: `NavBar` currently sits outside `<Routes>`, so it also
+renders on `/login` — showing Home/Transactions links to someone who is not logged in. Clicking
+one just bounces them back to `/login`, so it is not a security hole, only sloppy. Cheapest fix is
+wrapping the two `NavLink`s in the same `isLoggedIn &&`. Decide when you see it in the browser.
+
+---
+
+##### `frontend/src/core/RequireAuth.test.tsx` (new)
+
+```tsx
+import { render, screen } from "@testing-library/react";
+import { MemoryRouter, Routes, Route } from "react-router-dom";
+import { AuthProvider } from "../context/AuthContext";
+import { RequireAuth } from "./RequireAuth";
+
+// MemoryRouter instead of BrowserRouter: keeps history in memory, and
+// `initialEntries` lets a test start on any URL without touching jsdom's
+// address bar. The standard router-testing tool.
+function renderAt(path: string) {
+  return render(
+    <AuthProvider>
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route path="/login" element={<p>login page</p>} />
+          <Route element={<RequireAuth />}>
+            <Route path="/transactions" element={<p>secret transactions</p>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </AuthProvider>,
+  );
+}
+
+beforeEach(() => localStorage.clear());
+
+test("redirects to /login when no token", () => {
+  renderAt("/transactions");
+  expect(screen.getByText("login page")).toBeInTheDocument();
+});
+
+test("renders the protected route when a token exists", () => {
+  localStorage.setItem("token", "fake.jwt.token");   // AuthProvider reads this on mount
+  renderAt("/transactions");
+  expect(screen.getByText("secret transactions")).toBeInTheDocument();
+});
+```
+
+Note what is *not* tested: whether the token is valid. That is the backend's job
+(`requireAuth` middleware, already tested in 2b). The frontend guard only answers "is there a
+token" — a forged localStorage entry gets you a rendered page whose every API call returns 401.
+Frontend guards are UX, not security. Worth being explicit about, because it is a common
+interview question and a common junior mistake.
+
+**3b done when:** logged out, `/transactions` in the address bar lands on `/login`; after login it
+renders; the logout button clears the token and bounces you back; both tests pass.
+
+---
+
+#### Phase 3c — Vite `/api` proxy + a healthcheck that means something
+
+**What it produces**
+
+```
+DEV (two servers, one origin as far as the browser is concerned)
+
+  browser :5173 ──fetch('/api/transactions')──▶ Vite dev server :5173
+                                                      │ proxy rule
+                                                      ▼
+                                                Express :4000
+Same origin → no CORS preflight, no CORS config in Express, and the
+relative fetch() paths already written in api/auth.ts work unchanged.
+
+GET /health  (no auth — Railway and CI must reach it without a token)
+      │
+      ▼
+  SELECT 1  ──▶ ok    → 200 { status: 'ok', db: 'ok' }
+            ──▶ throw → 503 { status: 'ok', db: 'down' }
+```
+
+Why a `SELECT 1` and not `res.json({status:'ok'})`: a healthcheck that only proves Node is alive
+will report green while Postgres is unreachable and every real request 500s. Railway would keep
+routing traffic to a dead instance. The DB round-trip is the whole point.
+
+**Structure — new/changed files**
+
+```
+frontend/
+└── vite.config.ts               # + server.proxy
+backend/src/
+├── routes/health.ts             # new
+├── controllers/health.ts        # new
+├── routes/health.test.ts        # new
+└── index.ts                     # mounts /health BEFORE requireAuth
+```
+
+---
+
+##### `frontend/vite.config.ts` (updated)
+
+```ts
+import { defineConfig } from "vitest/config";
+import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
+
+export default defineConfig({
+  plugins: [react(), tailwindcss()],
+  server: {
+    proxy: {
+      // Any request the dev server receives starting with /api is forwarded
+      // to Express. The browser only ever talks to :5173, so it never sees a
+      // cross-origin request and never sends a CORS preflight.
+      "/api": {
+        target: "http://localhost:4000",
+        changeOrigin: true,   // rewrites the Host header to the target — matters
+                              // the moment the backend is behind a proxy/vhost
+      },
+    },
+  },
+  test: {
+    environment: "jsdom",
+    globals: true,
+    setupFiles: "./src/setupTests.ts",
+  },
+});
+```
+
+Dev-only — this config does not exist in production, where Vercel serves the built frontend and
+`/api` must point at the Railway URL via `VITE_API_URL`. That switch is Phase 8a's problem; note
+it now so it is not a surprise then.
+
+`4000` is the port Express binds on your **host** (published by Compose as `4000:4000`). The
+Vite dev server runs on the host too, so `localhost:4000` is correct here — the `postgres`-style
+service-name addressing only applies *between* containers.
+
+---
+
+##### `backend/src/controllers/health.ts` (new)
+
+```ts
+import type { Request, Response } from "express";
+import { db } from "../db/knex.js";
+
+export async function health(req: Request, res: Response) {
+  try {
+    await db.raw("SELECT 1");                      // cheapest possible real round-trip
+    res.json({ status: "ok", db: "ok" });
+  } catch {
+    // 503 Service Unavailable, not 500: the app is fine, a dependency is not.
+    // Railway's healthcheck treats any non-2xx as unhealthy and stops routing.
+    res.status(503).json({ status: "ok", db: "down" });
+  }
+}
+```
+
+`db.raw()` is Knex's escape hatch for SQL the query builder cannot express. `SELECT 1` returns one
+row of one constant — it touches no table, so it stays valid no matter how the schema changes in
+Phase 4.
+
+Deliberate choice: this controller talks to `db` directly instead of going through a service.
+The service layer exists to keep business logic testable without HTTP — there is no business logic
+here, so a `services/health.ts` wrapping one `db.raw` would be ceremony. Note it as a conscious
+exception to the layering rule, not an oversight.
+
+---
+
+##### `backend/src/routes/health.ts` (new)
+
+```ts
+import { Router } from "express";
+import * as controller from "../controllers/health.js";
+
+export const healthRouter = Router();
+healthRouter.get("/", controller.health);
+```
+
+---
+
+##### `backend/src/index.ts` (updated — insertion point matters)
+
+```ts
+app.use(express.json());
+
+app.use("/health", healthRouter);   // ← public, and mounted at /health not /api/health:
+                                    //   Railway's healthcheck path convention, and it keeps
+                                    //   the "everything under /api is app data" rule clean
+app.use("/api/auth", authRouter);                              // public
+app.use("/api/transactions", requireAuth, transactionsRouter); // protected
+```
+
+No auth on `/health` — Railway's health prober and GitHub Actions have no token. It leaks exactly
+one bit ("the DB is up"), which is the intended purpose.
+
+---
+
+##### `backend/src/routes/health.test.ts` (new)
+
+```ts
+import request from "supertest";
+import { app } from "../index.js";
+import { db } from "../db/knex.js";
+
+afterAll(async () => {
+  await db.destroy();
+});
+
+test("GET /health returns 200 with db ok", async () => {
+  const res = await request(app).get("/health");
+  expect(res.status).toBe(200);
+  expect(res.body).toEqual({ status: "ok", db: "ok" });
+});
+
+test("GET /health needs no Authorization header", async () => {
+  const res = await request(app).get("/health");
+  expect(res.status).not.toBe(401);
+});
+```
+
+The `db: "down"` branch is not unit-tested — faking a dead pool costs more than it returns. You
+verify it once by hand: `docker compose stop postgres`, `curl -i localhost:4000/health`, expect
+503, then `docker compose start postgres`.
+
+**3c done when:** `curl localhost:4000/health` returns `{"status":"ok","db":"ok"}`, the same
+endpoint returns 503 with Postgres stopped, and `LoginPage` logs in from the Vite dev server on
+`:5173` with no CORS error in the console.
+
+---
+
+**Phase 3 done when:** the full loop runs in a real browser — log in → land on `/` → hard-refresh
+and stay logged in (token survives in `localStorage`) → click Log out → bounced to `/login` →
+typing `/transactions` in the address bar bounces you again. Plus: 3a, 3b and 3c test files green.
+
+**Learning outcome:** why a custom hook shares logic but not state, `createContext` /
+Provider / `useContext` as the fix, the pathless-route guard pattern, `<Navigate replace>` vs
+`useNavigate()`, dev-server proxying as the no-CORS answer, and a healthcheck that proves the
+dependency rather than the process. All five carry straight into CREA.
 
 ### Phase 4 — Database schema + ETL + duplicate detection
 **Layer:** Backend · **Stack:** Knex migrations, PostgreSQL, Python · **Estimate:** 3.5 sessions · **Weeks 1–2**
