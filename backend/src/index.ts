@@ -3,6 +3,7 @@ import "dotenv/config";
 import express from "express";
 import { transactionsRouter } from "./routes/transactions.js";
 import { authRouter } from "./routes/auth.js";
+import { healthRouter } from "./routes/health.js";
 import { requireAuth } from "./middleware/auth.js";
 
 import { fileURLToPath } from "node:url";
@@ -20,7 +21,15 @@ export const app = express();
 app.use(express.json());
 
 // -----
-// ADD Routers `requireAuth` passed as a second argument to `app.use`
+// Routers mounted at root
+// -----
+app.use("/health", healthRouter); // ← public, and mounted at /health not /api/health:
+//   Railway's healthcheck path convention, and it keeps
+//   the "everything under /api is app data" rule clean
+
+// -----
+// Routers mounted at /api
+// If Auth required : `requireAuth` passed as a second argument to `app.use`
 // -----
 app.use("/api/auth", authRouter); // public
 app.use("/api/transactions", requireAuth, transactionsRouter); // protected — requireAuth runs first, then add the router
