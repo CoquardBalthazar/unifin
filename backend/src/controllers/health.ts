@@ -1,5 +1,6 @@
 // This files interacts directly with the db via a mock request that returns a row 1
 // Goal : health check prooving that the express db is working, not just that the node process is breathing, but that the actual backend is breathing.
+
 import type { Request, Response } from "express";
 import { db } from "../db/knex.js";
 
