@@ -6,7 +6,8 @@ export async function login(req: Request, res: Response) {
   // Guard against missing/misformed body
   const { email, password } = req.body ?? {};
   if (!email || !password) {
-    return res.status(400).json({ error: "Email and password required" });
+    res.status(400).json({ error: "Email and password required" });
+    return;
   }
 
   //   Assert Email & PW
@@ -17,7 +18,8 @@ export async function login(req: Request, res: Response) {
 
   // Error
   if (!isEmailCorrect || !isPasswordCorrect) {
-    return res.status(401).json({ error: "Invalid credentials" });
+    res.status(401).json({ error: "Invalid credentials" });
+    return;
   }
 
   // Success

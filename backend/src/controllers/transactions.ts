@@ -7,7 +7,9 @@ doesn't change.
 import type { Request, Response } from "express";
 import * as transactionsService from "../services/transactions.js";
 
-export async function listTransactions(req: Request, res: Response) {
+// `_req` — the underscore marks it deliberately unused; it can't be removed
+// because `res` has to stay the second parameter.
+export async function listTransactions(_req: Request, res: Response) {
   const transactions = await transactionsService.getAllTransactions();
   res.json(transactions);
 }
@@ -17,7 +19,8 @@ export async function getTransaction(req: Request, res: Response) {
   const transaction = await transactionsService.getTransactionById(id);
 
   if (!transaction) {
-    return res.status(404).json({ error: "Transaction not found" });
+    res.status(404).json({ error: "Transaction not found" });
+    return;
   }
   res.json(transaction);
 }
@@ -26,9 +29,10 @@ export async function createTransaction(req: Request, res: Response) {
   const { date, raw_name, amount, flow } = req.body;
 
   if (!date || !raw_name || amount === undefined || !flow) {
-    return res
+    res
       .status(400)
       .json({ error: "date, raw_name, amount, flow are required" });
+    return;
   }
 
   const created = await transactionsService.createTransaction({

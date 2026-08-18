@@ -1,4 +1,10 @@
 {
+  // Without an explicit `include`, tsc defaults to `**/*` and picks up
+  // knexfile.ts, which lives outside `rootDir` (./src) → TS6059.
+  // knexfile.ts is config run by the knex CLI through tsx, not app code.
+  "include": ["src"],
+  "exclude": ["node_modules", "dist"],
+
   // Visit https://aka.ms/tsconfig to read more about this file
   "compilerOptions": {
     // File Layout
