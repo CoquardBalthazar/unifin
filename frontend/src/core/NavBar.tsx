@@ -1,5 +1,5 @@
 // src/core/NavBar.tsx
-import { NavLink } from "react-router-dom";
+import { Link, NavLink } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { LayoutDashboard, List, LogOut } from "lucide-react";
 
@@ -17,10 +17,13 @@ export function NavBar() {
     <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-surface p-4">
       {/* Brand — alt="" because the word "Unifin" is right there;
           announcing the logo too would just repeat it. */}
-      <div className="flex items-center gap-2.5 px-1 py-2">
+      <Link
+        to="/"
+        className="flex items-center gap-2.5 rounded px-1 py-2 transition-colors hover:bg-surface-alt"
+      >
         <img src="/mark-small.svg" alt="" className="size-7 rounded" />
         <span className="font-serif text-lg font-bold text-ink">Unifin</span>
-      </div>
+      </Link>
 
       <nav className="mt-6 flex flex-col gap-1">
         <NavLink to="/" end className={linkClass}>
