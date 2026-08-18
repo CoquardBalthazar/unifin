@@ -1989,9 +1989,9 @@ depends on 3a, so it goes first.*
 
 - [ ] ~~Create repo `unifin` on GitHub~~ — **done**
 - [ ] ~~`.gitignore`: `data/real/`, `backend/.env`, `frontend/.env`, `CLAUDE.local.md`~~ — **done**
-- [ ] **3a** — `AuthContext` + `AuthProvider`, `useAuth()` reads from it
-- [ ] **3b** — `<RequireAuth>` wrapper around `/` and `/transactions` · logout button in `NavBar`
-- [ ] **3c** — Vite dev-server proxy `/api` → `:4000` · `GET /health` with a real `SELECT 1`
+- [x] **3a** — `AuthContext` + `AuthProvider`, `useAuth()` reads from it
+- [x] **3b** — `<RequireAuth>` wrapper around `/` and `/transactions` · logout button in `NavBar`
+- [x] **3c** — Vite dev-server proxy `/api` → `:4000` · `GET /health` with a real `SELECT 1`
 - [ ] Confirm the full loop end to end: login → protected page → refresh (token survives) → logout → bounced to `/login`
 
 **Build order is not optional here:** 3b's `<RequireAuth>` reads the shared state 3a creates.
