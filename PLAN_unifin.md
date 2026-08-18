@@ -68,21 +68,35 @@ Full column list + the reasoning behind each non-obvious column lives in **Phase
 
 ```
 accounts        — id, bank, account_type, currency, label,
-                  opening_balance, opening_balance_date
+                  opening_balance, opening_balance_date, is_tracked
 
 transactions    — id, date, raw_name, amount, flow, created_at            (Phase 2a)
                   account_id, import_id, source_file, imported_at         (Phase 4)
                   category_id, category_source, category_confidence,
                   category_confirmed_at                                    (Phase 4)
-                  normalized_name                                          (Phase 4)
+                  normalized_name, counterparty, external_id               (Phase 4)
                   dedupe_hash, dedupe_seq   UNIQUE(dedupe_hash, dedupe_seq)(Phase 4)
                   transfer_pair_id (self-FK, nullable)                     (Phase 4)
 
 categories      — id, label, type (income/expense/transfer), visible
-category_rules  — id, pattern, category_id, priority
+category_rules  — id, bank, match_field, match_type, pattern,
+                  category_id, priority, confidence
 imports         — id, account_id, filename, row_count, inserted_count,
                   skipped_count, statement_balance, statement_date, imported_at
 ```
+
+**`accounts` is seeded with 7 rows, not 2** (locked 2026-08-18): BP Compte Courant · C24 Girokonto ·
+C24 Pocket Food · C24 Pocket Savings · C24 Pocket Rent · Trade Republic · PayPal. Each C24 pocket
+exports its own CSV, and no export carries a pocket marker — so `account_id` is chosen **per import
+file** via a `--account` CLI flag, never derived from a row. `is_tracked = false` lets Trade
+Republic and PayPal exist as transfer *destinations* before their parsers ship.
+
+**`category_rules` is one table doing three jobs** (locked 2026-08-18). `match_field` selects what
+`pattern` is compared against — `normalized_name` (substring), `bank_category` (C24's own
+`Kategorie`), or `mcc` (Trade Republic's ISO 18245 merchant code) — and `bank` scopes a rule to one
+source (`NULL` = all). `priority` *is* the policy: explicit merchant rules at 10, MCC at 50,
+bank-supplied categories at 90, first hit wins. Because it is data rather than code, Phase 5's rules
+screen is plain CRUD over one table.
 
 `recurring_series` (+ `transactions.recurring_series_id`) is deliberately **not** in v1 —
 it arrives with Phase 9 as its own migration.
@@ -98,14 +112,29 @@ their absence:
 | `category_confidence` | Phase 10 | Lets you sort "review these 12 first" |
 | `category_confirmed_at` | Phase 5 + 10 | **This is the "temporary" flag.** `NULL` = the app guessed and you haven't looked. Set = you validated it. Orthogonal to `category_source` on purpose: bulk-validating an AI suggestion sets `confirmed_at` but keeps `source='ai'`, so you can measure how often the AI was right. |
 | `transfer_pair_id` | Phase 6 | Links the outgoing BP row to the incoming C24 row. Not needed for *exclusion* (that's a `WHERE categories.type != 'transfer'`), but it's the only way to catch money that left one account and never arrived at the other. |
+| `external_id` | Phase 4d + post-launch | The source system's own transaction id. Trade Republic ships a stable UUID, so TR dedupe is exact instead of computed. Also the join key PayPal enrichment needs. |
+| `counterparty` | Phase 5 | The clean payee (`Bolt Operations OÜ`), separate from the noisy `raw_name`. What the transactions table actually displays. |
 
-**The rules loop:** on import, `normalized_name` matched against `category_rules` (substring,
-ordered by priority). Match → `category_id` set, `category_source = 'rule'`. No match → `NULL`
-(shown as "uncategorized", flagged for review). Manual override in the UI → `category_source = 'manual'`,
+**The rules loop (revised 2026-08-18).** On import, each row is matched against `category_rules`
+ordered by `priority ASC`, first hit wins. A hit sets `category_id`, `category_source = 'rule'` and
+copies the rule's `confidence` onto the row — but leaves `category_confirmed_at = NULL`, because a
+guess is not a decision. Manual override in the UI → `category_source = 'manual'`,
 `category_confirmed_at = now()`.
 
-**Categories** seeded from existing `FOLGUNG_der_Kontos_WIP.xlsx` taxonomy:
-FOOD & Households, HOUSING rent, TRANSPORT, HOBBIES, HEALTH, TRIPS, SAVINGS, STUDIES, PHONE bundle, PARTIES & Sorties, OTHERS-inflow, OTHERS-outflow, ARBEIT, internal transfers (BALU), scholarships (BRMI, CROUS, Erasmus+), etc.
+**Categories — flat list, 19 rows** (locked 2026-08-18; no `parent_id`, adding one later is a 3-line
+migration). Seeded from the `FOLGUNG_der_Kontos_WIP.xlsx` taxonomy:
+
+| type | labels |
+|---|---|
+| `expense` | FOOD & Households · HOUSING rent · TRANSPORT · HOBBIES · HEALTH · TRIPS · STUDIES · PHONE bundle · PARTIES & Sorties · OTHERS-outflow |
+| `income` | ARBEIT · BRMI · CROUS · Erasmus+ · OTHERS-inflow |
+| `transfer` | SAVINGS · INVESTING · BALU · C24 pockets |
+
+**Every transfer category must be `type = 'transfer'` or Phase 6's totals will lie.** Money moved to
+Trade Republic is not consumption; counting it as expense overstates spending by whatever was saved.
+`INVESTING` covers the TR cash → securities leg (Phase 4d). There is deliberately **no
+`Uncategorized` row** — `category_id IS NULL` means uncategorized, and a row standing for "no row"
+forces a special case into every aggregate query.
 
 ---
 
@@ -192,12 +221,18 @@ Three reasons, in order:
 | # | Phase | Sessions | Delivers |
 |---|---|---|---|
 | **3** | Skeleton hardening | 2 | `AuthContext`, `RequireAuth` + logout, `GET /health`, Vite proxy → backend |
-| **4** | Schema + ETL + **duplicate detection** | 3.5 | 4 migrations, accounts seeded, `db_insert.py` writes real BP+C24 rows, duplicates rejected |
+| **4** | Schema + ETL + **duplicate detection** | ~~3.5~~ **4.25** | 4 migrations, **test DB**, accounts + categories + rules seeded, `db_insert.py` writes real BP+C24 **+ Trade Republic** rows, duplicates rejected |
 | **8a** | **Deploy early** | 2 | Railway (backend + Postgres), Vercel (frontend), secrets, prod migrations → **live URL** |
 | **5** | Transactions UI + manual categorization | 3 | Both banks in one table, inline category dropdown, uncategorized filter, search |
 | **6** | Overview + balances + reconciliation | 4.5 | Yearly category totals, transfer exclusion, per-account balance cards, reconciliation view |
 | **8b** | CI/CD + ship | 1.75 | GitHub Actions (lint → test w/ Postgres service → auto-deploy), prod smoke test, tag `v1.0.0` |
-| | | **16.75** | |
+| | | **17.5** | |
+
+**Re-scoped 2026-08-18 (+0.75).** Phase 4 grew from 3.5 to 4.25: a dedicated test database (+0.5 —
+the suite currently truncates the *dev* DB, which becomes destructive the moment real rows land) and
+the Trade Republic parser (+0.75 — TR is the 2026 daily card, so omitting it makes current-year
+totals wrong), less 0.5 reclaimed by deferring PayPal. Week 2 absorbs it; week 3 (Railway) has no
+slack, so **if a session is lost, cut Phase 4d — never 4a.**
 
 #### Week by week
 
@@ -228,8 +263,9 @@ Three reasons, in order:
 
 #### Known risks
 
-1. **Phase 4 against real data is the schedule killer.** 525 BP rows (TSV, ISO-8859-1, 7-row header) + ~508 C24 rows (CSV, UTF-8 BOM, semicolon), and the dedupe hash has to be right or the problem surfaces at row 900. Run against `data/sample/` first.
-2. **`data/sample/sample_bp.tsv` and `sample_c24.csv` still do not exist.** Hard blocker for Phase 4 *and* for CI in 8b. Budgeted into week 1.
+1. **Phase 4 against real data is the schedule killer.** Measured 2026-08-18: the 11 BP TSV exports (ISO-8859-1, CRLF, 7-row header) hold **1484 rows / 832 distinct** — the 90-day export windows overlap, so 652 rows are re-exports. C24 is CSV, **comma**-delimited (not semicolon), UTF-8 **with BOM**. The dedupe hash has to be right or the problem surfaces at row 900. Run against `data/sample/` first.
+2. **The sample fixtures exist but are unusable.** `sample_bp.tsv` is UTF-8/LF where the real export is ISO-8859-1/CRLF, so it never exercises the decode path; `sample_c24.csv` has no BOM; neither contains a within-file duplicate or an overlapping-export pair, so `dedupe_seq` and the re-import path are both untested. Rebuilt in Phase 4a via `scripts/make_fixtures.py`. Still a hard blocker for Phase 4 *and* for CI in 8b.
+2b. **`dedupe_seq` is load-bearing, not theoretical.** 26 rows are duplicated *within a single* BP export — three €13.00 `BEER KING` charges on 12/03/2024, three €5.00 `DOCKLAND GMBH` credits on 02/05/2024. A hash-only unique constraint silently eats all 26.
 3. **First Railway deploy may eat 2 sessions instead of 1.** Exactly why 8a sits in week 2–3 with runway behind it, not in week 5 where it would sink the date.
 4. **Offline homework, week 1, no coding:** look up the real account balance on the date of the earliest imported transaction, for both BP and C24. That's `accounts.opening_balance` / `opening_balance_date`. Without it the Phase 6 reconciliation view is off by a constant and a session gets burned hunting a bug that isn't one.
 
@@ -2585,86 +2621,765 @@ Provider / `useContext` as the fix, the pathless-route guard pattern, `<Navigate
 dependency rather than the process. All five carry straight into CREA.
 
 ### Phase 4 — Database schema + ETL + duplicate detection
-**Layer:** Backend · **Stack:** Knex migrations, PostgreSQL, Python · **Estimate:** 3.5 sessions · **Weeks 1–2**
+**Layer:** Backend · **Stack:** Knex migrations, PostgreSQL, Python, Vitest · **Estimate:** 4.25 sessions · **Weeks 1–2**
 
 *The real schema lands here, and the Python ETL starts writing to Postgres with duplicate
 rejection. This is the highest-risk phase in the plan — see §5.0 risk 1.*
 
-**Note on the original plan:** the previous checklist omitted the `accounts` table entirely,
-even though §3 lists it. Without it there is no `account_id` on transactions, and balance
-reconciliation is impossible. Fixed below.
+#### Decisions locked 2026-08-18
 
-Four migrations, **in this order** — FK targets must exist before the table referencing them.
+| Decision | Choice | Reason |
+|---|---|---|
+| Test isolation | Second **database** (`db-unifin-test`) in the existing `postgres` container | Zero extra RAM, one healthcheck. Everything reads `DATABASE_URL_TEST`, so switching to a dedicated `postgres-test` service later is an env-var change + 8 lines of Compose |
+| Category shape | **Flat** list, no `parent_id` | Phase 6 totals stay one `GROUP BY`. Adding `parent_id` later is a 3-line migration; flattening a hierarchy is not |
+| Savings / investments | `type = 'transfer'` | Money invested is not consumption. Counting it as expense makes the yearly total lie by whatever you saved |
+| Bank-provided categories | Fallback **after** rules, via `priority` | C24 ships `Kategorie` on every row and TR ships `mcc_code`. Free coverage; explicit rules still win |
+| Rules storage | **One** `category_rules` table with `bank` + `match_field` | Three behaviours (name substring, bank category, MCC), one matching loop, one CRUD screen in Phase 5 |
+| C24 pockets | Separate accounts (Girokonto + Food + Savings + Rent) | Each pocket exports its own CSV. The rows carry no pocket marker, so `account_id` is chosen **per import file**, not per row |
+| Trade Republic | Full account, **Phase 4d** | It is the 2026 daily card (`ALDI SUED`, `REWE`, `SNCF`). Excluding it makes current-year totals wrong |
+| TR `BUY` / `SELL` | Cash side only, category `INVESTING` (`type = 'transfer'`) | The TR cash balance reconciles; expense totals stay clean; no portfolio tracking scope creep |
+| PayPal | **Not** an account in v1 — deferred as an *enricher* | Importing it counts every purchase 2–3× (payment row + funding row + the card charge already in BP). See 4e note |
+| Multi-user | Not prepared for | The work is `WHERE user_id = ?` on every query, not the column. A dead nullable column saves nothing |
+
+#### Revised estimate: 3.5 → 4.25 sessions
+
+| Added | Cost | Why it's not optional |
+|---|---|---|
+| Test DB + fixtures (4a) | +0.5 | Today `transactions.test.ts` truncates the **dev** DB. The first `npm test` after a real import deletes 832 rows |
+| Trade Republic (4d) | +0.75 | Third parser, but it is where 2026 spending lives |
+| PayPal deferred | −0.5 | Reclaimed from the original scope |
+
+Week 2 has the slack for this. Week 3 (Railway) does not — so if a session is lost, **cut 4d, not 4a.**
+
+#### Sub-phases
+
+| # | Delivers | Sessions | Stop-and-confirm point |
+|---|---|---|---|
+| **4a** | Test DB + sample fixtures | 0.75 | `npm test` runs against `db-unifin-test`; dev DB row count unchanged |
+| **4b** | Migrations M1–M4 + seeds | 1.0 | `migrate:latest` → `rollback` → `latest` clean; seeds idempotent |
+| **4c** | `db_insert.py` — BP + C24, dedupe, rules | 1.25 | Same file imported twice → `inserted_count = 0` the second time |
+| **4d** | Trade Republic parser + MCC rules | 0.75 | TR rows import; UUID dedupe; `BUY` rows land as transfers |
+| **4e** | Real data + reconciliation | 0.5 | 832 BP rows in, counts match, re-import of an overlapping export skips correctly |
 
 ---
 
-#### M1 — `accounts`
+#### Phase 4a — Test database + sample fixtures
+**0.75 session** · *Do this first. Every later step needs somewhere safe to fail.*
+
+##### Why this is step one
+
+[transactions.test.ts:39](backend/src/routes/transactions.test.ts#L39) currently calls
+`db("transactions").truncate()` against **`DATABASE_URL`** — the dev database. That is harmless
+today (the table is empty) and catastrophic on 2026-08-25, when it holds 832 imported rows and
+you run `npm test` out of habit. It also breaks outright the moment M3/M4 add foreign keys:
+plain `TRUNCATE` on a table referenced by `imports` throws.
+
+##### Files
+
+```
+docker/pg-init/01-create-test-db.sql        NEW
+docker-compose.yml                           EDIT   mount pg-init
+backend/.env                                 EDIT   ❌ gitignored
+backend/.env.example                         EDIT   ✅ committed
+backend/vitest.config.ts                     NEW
+backend/test/globalSetup.ts                  NEW
+backend/test/helpers/db.ts                   NEW
+backend/src/routes/transactions.test.ts      EDIT   use the helper
+scripts/make_fixtures.py                     NEW
+data/sample/sample_bp.tsv                    FIX    wrong encoding today
+data/sample/sample_bp_overlap.tsv            NEW
+data/sample/sample_c24.csv                   FIX    missing BOM today
+data/sample/sample_c24_overlap.csv           NEW
+data/sample/sample_tr.csv                    NEW    used in 4d
+data/sample/README.md                        NEW
+```
+
+---
+
+##### Step 4a.1 — Create the second database
+
+`docker/pg-init/01-create-test-db.sql`:
+
+```sql
+-- Runs once, only when the postgres_data volume is initialised empty.
+CREATE DATABASE "db-unifin-test" OWNER "u-unifin";
+```
+
+`docker-compose.yml` — add one line to the `postgres` service:
+
+```yaml
+  postgres:
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/pg-init:/docker-entrypoint-initdb.d:ro    # ← new
+```
+
+- `./docker/pg-init` — host directory holding the SQL.
+- `:/docker-entrypoint-initdb.d` — the path the official `postgres` image scans on first boot; every `.sql` / `.sh` in it runs in filename order.
+- `:ro` — mounted read-only. The container has no business writing to your repo.
+
+**The gotcha that will cost you 20 minutes if you skip it:** `docker-entrypoint-initdb.d` only
+runs when the data directory is **empty**. Your `postgres_data` volume already exists, so
+mounting the script changes nothing by itself. Pick one:
+
+```bash
+docker compose down -v
+```
+- `down` — stop and remove containers + networks.
+- `-v` — **also delete named volumes.** This wipes `db-unifin`. Safe right now (Phase 2 scratch data only); never run it after 4e.
+
+or create it by hand once and keep the script for future clean boots:
+
+```bash
+docker compose exec postgres psql -U u-unifin -d db-unifin -c 'CREATE DATABASE "db-unifin-test" OWNER "u-unifin";'
+```
+- `exec postgres` — run inside the **already running** `postgres` container (`run` would start a second one).
+- `psql -U u-unifin` — connect as that role.
+- `-d db-unifin` — connect to an existing database; you cannot `CREATE DATABASE` while connected to the one being created.
+- `-c '…'` — execute one statement and exit.
+
+**DoD 4a.1**
+```bash
+docker compose exec postgres psql -U u-unifin -l
+```
+`-l` lists databases. Both `db-unifin` and `db-unifin-test` appear, owner `u-unifin`.
+
+---
+
+##### Step 4a.2 — Point Vitest at the test database
+
+`backend/.env` (and the same two keys, placeholder values, in `.env.example`):
+
+```bash
+DATABASE_URL=postgres://u-unifin:pw-unifin@postgres:5432/db-unifin
+DATABASE_URL_TEST=postgres://u-unifin:pw-unifin@postgres:5432/db-unifin-test
+```
+
+`backend/vitest.config.ts` — **new file**, Vitest currently runs on defaults:
 
 ```ts
-export async function up(knex: Knex): Promise<void> {
-  await knex.schema.createTable("accounts", (table) => {
-    table.increments("id").primary();
-    table.string("bank").notNullable();               // 'BP' | 'C24'
-    table.string("account_type").notNullable();       // 'checking' | 'savings'
-    table.string("currency", 3).notNullable().defaultTo("EUR");
-    table.string("label").notNullable();              // "BP Compte Courant"
-    table.decimal("opening_balance", 12, 2).notNullable().defaultTo(0);
-    table.date("opening_balance_date");               // the balance was X on this date
-    table.timestamp("created_at").defaultTo(knex.fn.now());
-  });
+import { defineConfig } from "vitest/config";
+import dotenv from "dotenv";
+
+// This config file is evaluated in Node before any test worker spawns —
+// the only place we can read .env and swap the DB URL *before*
+// src/db/knex.ts is imported anywhere.
+dotenv.config();
+
+export default defineConfig({
+  test: {
+    // Injected into process.env inside each worker, before module load.
+    env: {
+      DATABASE_URL: process.env.DATABASE_URL_TEST!,
+      NODE_ENV: "test",
+    },
+    globalSetup: "./test/globalSetup.ts",
+    // One shared database. With parallelism on, two files would
+    // TRUNCATE each other's fixtures mid-assertion.
+    fileParallelism: false,
+  },
+});
+```
+
+**Why a `beforeAll` would not work here.** `src/db/knex.ts` reads `process.env.DATABASE_URL` at
+*module load time*, and `src/index.ts` does `import "dotenv/config"` on its first line. By the
+time any `beforeAll` runs, the pool is already pointed at the dev DB. `test.env` lands before
+both — and **`dotenv` never overwrites an already-set variable** (concept box, Phase 3c), so
+`.env` cannot clobber the injected value. That property is doing the load-bearing work.
+
+`backend/test/globalSetup.ts`:
+
+```ts
+import knex from "knex";
+import config from "../knexfile.js";
+
+// Runs ONCE per `npm test`, before the first test file.
+// Migrating here means every test run also exercises M1–M4 —
+// free coverage on the riskiest code in this phase.
+export async function setup() {
+  const db = knex({ ...config, connection: process.env.DATABASE_URL_TEST! });
+  await db.migrate.latest();
+  await db.seed.run();          // accounts, categories, category_rules (4b)
+  await db.destroy();
 }
 ```
 
-`opening_balance` is what makes reconciliation possible at all. The BP export starts in 2022 —
-without a known balance at that date, every computed balance is off by whatever sat in the
-account before the first imported row.
+`backend/test/helpers/db.ts`:
+
+```ts
+import { db } from "../../src/db/knex.js";
+
+// Wipes transactional data between tests; keeps reference seeds.
+//   CASCADE         — required: imports.account_id and the
+//                     transactions.transfer_pair_id self-FK both
+//                     make a bare TRUNCATE throw.
+//   RESTART IDENTITY— resets id sequences so tests can assert on id = 1.
+export function truncateTransactional() {
+  return db.raw("TRUNCATE transactions, imports RESTART IDENTITY CASCADE");
+}
+```
+
+Then edit [transactions.test.ts:39](backend/src/routes/transactions.test.ts#L39):
+
+```diff
+- await db("transactions").truncate();
++ await truncateTransactional();
+```
+
+and delete the `// NOTES : Change the db to test-db when in production` comment above it — it is
+now done.
+
+**Test to add** — `backend/test/isolation.test.ts`. This is the one test that proves 4a worked:
+
+```ts
+import { describe, test, expect, afterAll } from "vitest";
+import { db } from "../src/db/knex.js";
+
+afterAll(async () => { await db.destroy(); });
+
+describe("test database isolation", () => {
+  test("the suite is connected to db-unifin-test, not db-unifin", async () => {
+    const { rows } = await db.raw("SELECT current_database() AS name");
+    expect(rows[0].name).toBe("db-unifin-test");
+  });
+
+  test("reference seeds are present", async () => {
+    const [{ count }] = await db("categories").count();
+    expect(Number(count)).toBeGreaterThan(0);
+  });
+});
+```
+
+The first assertion is the entire point of this sub-phase. If it ever goes red, stop.
+
+**DoD 4a.2**
+1. `docker compose exec app npm test` — all green, including `isolation.test.ts`.
+2. Insert a marker row into the **dev** DB, run the suite, confirm it survives:
+```bash
+docker compose exec postgres psql -U u-unifin -d db-unifin -c "INSERT INTO transactions (date, raw_name, amount, flow) VALUES ('2026-01-01','CANARY',-1,'expense');"
+docker compose exec app npm test
+docker compose exec postgres psql -U u-unifin -d db-unifin -c "SELECT count(*) FROM transactions;"
+```
+The count must still be 1. If it is 0, the env swap did not take.
 
 ---
 
-#### M2 — `categories` + `category_rules`
+##### Step 4a.3 — Sample fixtures
 
-```ts
-await knex.schema.createTable("categories", (table) => {
-  table.increments("id").primary();
-  table.string("label").notNullable().unique();
-  table.enu("type", ["income", "expense", "transfer"]).notNullable();
-  table.boolean("visible").notNullable().defaultTo(true);
-});
+Two different things, do not conflate them:
 
-await knex.schema.createTable("category_rules", (table) => {
-  table.increments("id").primary();
-  table.string("pattern").notNullable();              // matched against normalized_name
-  table.integer("category_id").references("id").inTable("categories").onDelete("CASCADE");
-  table.integer("priority").notNullable().defaultTo(100);   // lower wins
-});
+- **`data/sample/*`** — fake bank *export files*, fed to the Python ETL. Test the **parser**.
+- **`backend/test/*`** — rows inserted straight into Postgres. Test the **API**.
+
+Current state of `data/sample/` — the files exist but are not usable as fixtures:
+
+| | Real export | `data/sample/` today | |
+|---|---|---|---|
+| BP encoding | ISO-8859-1, CRLF | UTF-8, LF | ✗ never exercises `encoding="ISO-8859-1"` in [bp.py:39](backend/python/bank/bp.py#L39) |
+| C24 encoding | UTF-8 **with BOM** | no BOM | ✗ BOM bugs cannot surface |
+| Within-file duplicates | 26 across the BP exports | 0 | ✗ `dedupe_seq` untested |
+| Overlapping export | 464 shared rows across files | none | ✗ re-import path untested |
+
+###### Required rows — `sample_bp.tsv`
+
+Header block is **exactly 7 lines** (5 meta + 1 blank + 1 column header), because `bp.py`
+hardcodes `skiprows=7`. Body must contain one of each:
+
+| # | Row | Proves |
+|---|---|---|
+| a | `ACHAT CB SAMPLE MARKET 12.03.26 EUR    45,20 CARTE NO  111  ` | normalizer strips padding, dates, card numbers |
+| b | **3 byte-identical rows** (same date, Libellé, amount) | `dedupe_seq` → 0, 1, 2 — models the real `BEER KING ×3` |
+| c | 2 rows, same date + amount, **different** Libellé | hash includes the name; both must insert |
+| d | `VIREMENT SALAIRE SAMPLE EMPLOYER SA` `+2200,00` | `flow = income`, rule → `ARBEIT` |
+| e | `VIREMENT INSTANTANE A SAMPLE PERSON` | transfer pairing, Phase 6 |
+| f | `ACHAT CB CAFÉ DES ARTS …` | **the ISO-8859-1 canary** — wrong encoding renders `CAFÃ‰` and fails loudly instead of silently |
+| g | `ACHAT CB PAYPAL  SAMPLE 01.03.26 CARTE NUMERO   111  ` | the 9.3% of BP rows PayPal enrichment will later fix |
+
+###### `sample_bp_overlap.tsv`
+
+Same header block, different `Date` / `Solde`. Body = the newest **5 rows of `sample_bp.tsv`,
+byte-identical** + **3 new rows** dated later. Importing it second must yield
+`inserted_count = 3, skipped_count = 5`. That single assertion is the Definition of Done for the
+whole dedupe design.
+
+###### `sample_c24.csv`
+
+UTF-8 **with BOM**, comma-delimited, amounts quoted German-style (`"-37,99"`). Must contain:
+a `Verwendungszweck` of ~95 chars (the real maximum — catches truncation), an
+`Einkommen / Lohn/ Gehalt` row, a `Geldanlage / Kapitalanlage` row, a `Bargeldabhebung`, one
+within-file duplicate pair, and one row with an **empty** `Verwendungszweck` (exercises the
+`rstrip("_")` in [c24.py:59](backend/python/bank/c24.py#L59)).
+
+###### `sample_tr.csv`
+
+Tab-delimited, `M/D/YYYY` dates, `.` decimal separator. Needs one row of each `type` the parser
+branches on: `CARD_TRANSACTION` (with an `mcc_code`), `TRANSFER_INSTANT_INBOUND`, `BUY` (with a
+non-zero `fee`), `CARD_ORDERING_FEE`. Used in 4d.
+
+###### How to build them
+
+Hand-typing ISO-8859-1 + CRLF in an editor is a coin flip. Write a generator instead —
+`scripts/make_fixtures.py`, one function per bank:
+
+```python
+BP_ROWS = [...]  # (date, libelle, amount) tuples — the a–g table above
+
+with open("data/sample/sample_bp.tsv", "w",
+          encoding="ISO-8859-1",   # ← the whole point
+          newline="\r\n") as f:    # ← CRLF, matching the real export
+    ...
+
+with open("data/sample/sample_c24.csv", "w",
+          encoding="utf-8-sig",    # ← "-sig" writes the BOM
+          newline="\r\n") as f:
+    ...
+```
+
+**DoD 4a.3**
+```bash
+python3 scripts/make_fixtures.py && file data/sample/*
+```
+- `file` — reads magic bytes and reports the detected encoding.
+- Required output: `sample_bp.tsv: ISO-8859 text, with CRLF line terminators`.
+  If it says `UTF-8`, the fixture is worthless — regenerate.
+
+Confirm the C24 BOM separately:
+```bash
+head -c 3 data/sample/sample_c24.csv | xxd
+```
+- `head -c 3` — first 3 bytes only.
+- `xxd` — hex dump. Must read `efbb bf`.
+
+`data/sample/README.md` records what each row proves, so nobody deletes the weird-looking
+triplicate rows in six months thinking they are a mistake.
+
+**4a done when:** `npm test` is green, connected to `db-unifin-test`, the dev-DB canary row
+survives a full test run, and `file data/sample/*` reports the right encodings.
+
+---
+
+#### Phase 4b — Migrations M1–M4 + seeds
+**1.0 session**
+
+Four migrations, **in this order** — a foreign key's target table must exist before the table
+referencing it. Knex runs migrations in filename order, so the timestamp prefix *is* the
+ordering. Generate each with:
+
+```bash
+docker compose exec app npx knex migrate:make create_accounts --knexfile knexfile.ts
+```
+- `npx knex` — run the locally installed Knex CLI (no global install).
+- `migrate:make <name>` — create a timestamped, empty migration file (Alembic's `revision`).
+- `--knexfile knexfile.ts` — the CLI needs to be told, since the default lookup is `knexfile.js`.
+
+> **Never edit a migration that has already run.** Append a new one. This is the same rule as
+> Alembic, and the reason `alterTable` exists in M4.
+
+##### Files
+
+```
+backend/src/db/migrations/<ts>_create_accounts.ts        NEW   M1
+backend/src/db/migrations/<ts>_create_categories.ts      NEW   M2
+backend/src/db/migrations/<ts>_create_imports.ts         NEW   M3
+backend/src/db/migrations/<ts>_alter_transactions.ts     NEW   M4
+backend/src/db/seeds/01_accounts.ts                      NEW
+backend/src/db/seeds/02_categories.ts                    NEW
+backend/src/db/seeds/03_category_rules.ts                NEW
+backend/knexfile.ts                                      EDIT  add seeds directory
+backend/src/db/schema.ts                                 NEW   shared TS types
+backend/test/migrations.test.ts                          NEW
+```
+
+`knexfile.ts` needs one addition — the CLI does not guess the seeds path:
+
+```diff
+  migrations: {
+    directory: "./src/db/migrations",
+  },
++ seeds: {
++   directory: "./src/db/seeds",
++ },
 ```
 
 ---
 
-#### M3 — `imports` (one row per file fed in)
+##### M1 — `accounts`
 
 ```ts
-await knex.schema.createTable("imports", (table) => {
-  table.increments("id").primary();
-  table.integer("account_id").references("id").inTable("accounts").notNullable();
-  table.string("filename").notNullable();
-  table.integer("row_count").notNullable();           // rows present in the file
-  table.integer("inserted_count").notNullable();      // actually new
-  table.integer("skipped_count").notNullable();       // duplicates rejected
-  table.decimal("statement_balance", 12, 2);          // what the bank says — nullable
-  table.date("statement_date");
-  table.timestamp("imported_at").defaultTo(knex.fn.now());
-});
+import type { Knex } from "knex";
+
+export async function up(knex: Knex): Promise<void> {
+  await knex.schema.createTable("accounts", (table) => {
+    table.increments("id").primary();
+    table.string("bank").notNullable();               // 'BP' | 'C24' | 'TR' | 'PAYPAL'
+    table.string("account_type").notNullable();       // 'checking' | 'pocket' | 'broker' | 'wallet'
+    table.string("currency", 3).notNullable().defaultTo("EUR");
+    table.string("label").notNullable().unique();     // "C24 Pocket Food"
+    table.decimal("opening_balance", 12, 2).notNullable().defaultTo(0);
+    table.date("opening_balance_date");               // the balance was X on this date
+    table.boolean("is_tracked").notNullable().defaultTo(true);
+    table.timestamp("created_at").defaultTo(knex.fn.now());
+  });
+}
+
+export async function down(knex: Knex): Promise<void> {
+  await knex.schema.dropTable("accounts");
+}
+```
+
+**`opening_balance` is what makes reconciliation possible at all.** The BP export starts in 2022 —
+without a known balance at that date, every computed balance is off by whatever sat in the
+account before the first imported row. §5.0 risk 4 is the offline homework that fills these in.
+
+**`is_tracked`** (new, 2026-08-18) lets Trade Republic and PayPal exist as account *rows* — so a
+`SAVINGS` transfer out of BP resolves to a named destination and `transfer_pair_id` has something
+to point at — without their transactions being imported. Flip to `true` when the parser lands.
+
+**`label` is `unique()`** because the seed is idempotent via `onConflict("label").merge()`
+(below). Without the constraint, re-running `db.seed.run()` silently doubles your accounts —
+and `globalSetup.ts` runs it on every single `npm test`.
+
+###### Seed — `01_accounts.ts`
+
+`account_id` is chosen **per import file**, not per row: no bank export carries a pocket marker,
+so the CLI decides. The `id` values below are the ones you will pass to `--account`.
+
+```ts
+import type { Knex } from "knex";
+
+export async function seed(knex: Knex): Promise<void> {
+  await knex("accounts")
+    .insert([
+      { id: 1, bank: "BP",     account_type: "checking", label: "BP Compte Courant",
+        opening_balance: 0, opening_balance_date: null,  is_tracked: true },
+      { id: 2, bank: "C24",    account_type: "checking", label: "C24 Girokonto",
+        opening_balance: 0, opening_balance_date: null,  is_tracked: true },
+      { id: 3, bank: "C24",    account_type: "pocket",   label: "C24 Pocket Food",
+        opening_balance: 0, opening_balance_date: null,  is_tracked: true },
+      { id: 4, bank: "C24",    account_type: "pocket",   label: "C24 Pocket Savings",
+        opening_balance: 0, opening_balance_date: null,  is_tracked: true },
+      { id: 5, bank: "C24",    account_type: "pocket",   label: "C24 Pocket Rent",
+        opening_balance: 0, opening_balance_date: null,  is_tracked: true },
+      { id: 6, bank: "TR",     account_type: "broker",   label: "Trade Republic",
+        opening_balance: 0, opening_balance_date: null,  is_tracked: false },  // → true in 4d
+      { id: 7, bank: "PAYPAL", account_type: "wallet",   label: "PayPal",
+        opening_balance: 0, opening_balance_date: null,  is_tracked: false },  // enricher only
+    ])
+    // Idempotent: re-running updates instead of duplicating.
+    // Python analogy: this is an UPSERT, like pandas' combine_first
+    // rather than a blind concat.
+    .onConflict("label")
+    .merge();
+
+  // increments() has its own sequence; explicit ids leave it at 0,
+  // so the next un-seeded insert would collide on id = 1.
+  await knex.raw(
+    "SELECT setval('accounts_id_seq', (SELECT MAX(id) FROM accounts))",
+  );
+}
+```
+
+###### `opening_balance` — anchored at 2026-01-01 (decided 2026-08-18)
+
+Rather than hunting the 2022 balance, all accounts anchor at **`opening_balance_date = '2026-01-01'`**
+with the real balance on that date. Pragmatic and correct — but it comes with one hard constraint
+and one consequence, both of which have to be written down now or they become a bug hunt in week 5.
+
+**Convention — pick it once, here.** `opening_balance` is the balance **after** all transactions
+dated on or before `opening_balance_date`. That is what a bank statement means by
+`Solde (EUROS)` at a given `Date`, and it is what `imports.statement_balance` /
+`statement_date` will hold — so reconciliation compares like with like. The running balance is
+therefore:
+
+```sql
+SELECT a.opening_balance + COALESCE(SUM(t.amount), 0) AS balance
+FROM accounts a
+LEFT JOIN transactions t
+  ON t.account_id = a.id
+ AND t.date > a.opening_balance_date     -- strictly greater: the anchor already includes that day
+WHERE a.id = ?
+GROUP BY a.id, a.opening_balance;
+```
+
+Using `>=` instead of `>` double-counts every transaction dated 2026-01-01. That is the entire bug,
+and it is invisible unless something happened on New Year's Day.
+
+**Consequence: the 2022–2025 rows do not reconcile, by construction.** They still import, still
+appear in the transactions table, and still count toward yearly category totals — those are sums,
+not balances, and need no anchor. Only the *running balance* view is undefined before 2026-01-01.
+Phase 6 must therefore either scope the balance card to `date > opening_balance_date` or label it
+"since 01.01.2026" — not silently show a number that is wrong by four years of history.
+
+> ⚠️ **Still open — blocking for Phase 6, not for Phase 4.** `opening_balance` is seeded `0` above.
+> Look up the real 2026-01-01 balance for BP, C24 Girokonto, each of the 3 pockets, and Trade
+> Republic, then patch these rows. Until then the reconciliation view is off by a constant — a
+> *known* wrong number, not a bug to hunt.
+
+---
+
+##### M2 — `categories` + `category_rules`
+
+```ts
+export async function up(knex: Knex): Promise<void> {
+  await knex.schema.createTable("categories", (table) => {
+    table.increments("id").primary();
+    table.string("label").notNullable().unique();
+    table.enu("type", ["income", "expense", "transfer"]).notNullable();
+    table.boolean("visible").notNullable().defaultTo(true);
+  });
+
+  await knex.schema.createTable("category_rules", (table) => {
+    table.increments("id").primary();
+    table.string("bank");                             // 'BP'|'C24'|'TR' — null = all banks
+    table.enu("match_field", ["normalized_name", "bank_category", "mcc"])
+         .notNullable().defaultTo("normalized_name");
+    table.enu("match_type", ["contains", "exact"])
+         .notNullable().defaultTo("contains");
+    table.string("pattern").notNullable();
+    table.integer("category_id").notNullable()
+         .references("id").inTable("categories").onDelete("CASCADE");
+    table.integer("priority").notNullable().defaultTo(100);    // lower wins
+    table.decimal("confidence", 3, 2).notNullable().defaultTo(1.00);
+    table.unique(["bank", "match_field", "pattern"]);          // idempotent seeding
+    table.index(["bank", "match_field", "priority"]);
+  });
+}
+
+export async function down(knex: Knex): Promise<void> {
+  await knex.schema.dropTable("category_rules");   // drop the child first —
+  await knex.schema.dropTable("categories");       // the FK blocks the other order
+}
+```
+
+**One table, three behaviours.** You asked for per-bank rules *and* a per-bank fallback. Three
+tables would mean three matching loops and three CRUD screens in Phase 5. `match_field` collapses
+them into one:
+
+| `bank` | `match_field` | `match_type` | `pattern` | → category | `priority` | `confidence` |
+|---|---|---|---|---|---|---|
+| `null` | `normalized_name` | contains | `LIDL` | FOOD & Households | 10 | 1.00 |
+| `BP` | `normalized_name` | contains | `VIREMENT DE COMPO` | ARBEIT | 10 | 1.00 |
+| `TR` | `mcc` | exact | `5411` | FOOD & Households | 50 | 0.90 |
+| `C24` | `bank_category` | exact | `Lebensmittel` | FOOD & Households | 90 | 0.50 |
+
+**`priority` *is* the "rules first, bank fallback second" policy** — explicit patterns at 10, MCC
+codes at 50, bank-supplied categories at 90. No branching in the matcher: one `ORDER BY priority`,
+take the first hit. And because the policy is data rather than code, Phase 5's rules screen is
+plain CRUD over one table — exactly the "editable in code now, in the app later" you asked for.
+
+**`confidence` lives on the rule, not the row.** A `LIDL` substring match is certain; a
+`Lebensmittel` bank-category fallback is a guess. The matcher copies the rule's confidence onto
+`transactions.category_confidence`, so Phase 5 can sort "review these first" without knowing
+anything about *why* a row is uncertain.
+
+**Note on `table.enu()` on Postgres:** Knex compiles it to `varchar` + a `CHECK` constraint, not
+a native `CREATE TYPE`. Adding a value later means dropping and recreating the constraint in a new
+migration. Both enums above are closed sets — get them right now.
+
+###### Seed — `02_categories.ts`
+
+Taxonomy from `FOLGUNG_der_Kontos_WIP.xlsx`. **Every internal-transfer category must be
+`type = 'transfer'`, or Phase 6's yearly totals will lie.**
+
+```ts
+type Row = { label: string; type: "income" | "expense" | "transfer" };
+
+const CATEGORIES: Row[] = [
+  // ── expenses ──────────────────────────────────────────────
+  { label: "FOOD & Households",  type: "expense"  },
+  { label: "HOUSING rent",       type: "expense"  },
+  { label: "TRANSPORT",          type: "expense"  },
+  { label: "HOBBIES",            type: "expense"  },
+  { label: "HEALTH",             type: "expense"  },
+  { label: "TRIPS",              type: "expense"  },
+  { label: "STUDIES",            type: "expense"  },
+  { label: "PHONE bundle",       type: "expense"  },
+  { label: "PARTIES & Sorties",  type: "expense"  },
+  { label: "OTHERS-outflow",     type: "expense"  },
+  // ── income ────────────────────────────────────────────────
+  { label: "ARBEIT",             type: "income"   },
+  { label: "BRMI",               type: "income"   },
+  { label: "CROUS",              type: "income"   },
+  { label: "Erasmus+",           type: "income"   },
+  { label: "OTHERS-inflow",      type: "income"   },
+  // ── transfers — excluded from income AND expense totals ───
+  { label: "SAVINGS",            type: "transfer" },   // → Trade Republic
+  { label: "INVESTING",          type: "transfer" },   // TR cash → securities (4d)
+  { label: "BALU",               type: "transfer" },   // BP ↔ C24
+  { label: "C24 pockets",        type: "transfer" },   // Girokonto ↔ pocket
+];
+```
+
+Same `onConflict("label").merge()` + `setval` pattern as `01_accounts.ts`.
+
+**No `Uncategorized` row.** `category_id IS NULL` means uncategorized. A row representing "no row"
+is a trap: every aggregate query then needs a special case to exclude it.
+
+###### Naming convention (2026-08-18)
+
+Labels are **display strings** — they render in the transactions table's category chip and in the
+Phase 5 dropdown. Rules: Sentence case, no `&`, no ALL-CAPS, no language mixing, no leading
+qualifier (`OTHERS-inflow` sorts under O, which is wrong — the user thinks "other income").
+
+| Old | New | type |
+|---|---|---|
+| FOOD & Households | `Groceries and household` | expense |
+| HOUSING rent | `Housing` | expense |
+| TRANSPORT | `Transport` | expense |
+| HOBBIES | `Hobbies` | expense |
+| HEALTH | `Health` | expense |
+| TRIPS | `Travel` | expense |
+| STUDIES | `Studies` | expense |
+| PHONE bundle | `Phone and internet` | expense |
+| PARTIES & Sorties | `Going out` | expense |
+| OTHERS-outflow | `Other expenses` | expense |
+| ARBEIT | `Salary` | income |
+| BRMI | `Scholarship BRMI` | income |
+| CROUS | `Scholarship CROUS` | income |
+| Erasmus+ | `Scholarship Erasmus` | income |
+| OTHERS-inflow | `Other income` | income |
+| SAVINGS | `Savings transfer` | transfer |
+| INVESTING | `Investment purchase` | transfer |
+| BALU | `Transfer between banks` | transfer |
+| C24 pockets | `Pocket transfer` | transfer |
+
+**Renaming is cheap forever, so do not agonise.** `category_rules` references `category_id`, a
+foreign key — not the label. After 4b has run, a rename is `UPDATE categories SET label = …` and
+nothing else moves. The *only* place a label is resolved by string is `03_category_rules.ts`, which
+looks the ids up at seed time. So: settle the names before 4b runs and it costs nothing; change them
+afterwards and you update one seed file.
+
+> ⚠️ **Still open — blocking for 4c.** Confirm, correct or replace the table above, and say whether
+> any labels are missing or should be dropped.
+
+###### Seed — `03_category_rules.ts`
+
+Three blocks, one array. Priorities are deliberately spaced so you can wedge new rules between
+them without renumbering.
+
+```ts
+// ── 10: explicit merchant rules — certain ────────────────────
+{ bank: null,  match_field: "normalized_name", match_type: "contains",
+  pattern: "LIDL",       category: "FOOD & Households", priority: 10, confidence: 1.00 },
+{ bank: null,  match_field: "normalized_name", match_type: "contains",
+  pattern: "ALDI",       category: "FOOD & Households", priority: 10, confidence: 1.00 },
+{ bank: null,  match_field: "normalized_name", match_type: "contains",
+  pattern: "REWE",       category: "FOOD & Households", priority: 10, confidence: 1.00 },
+{ bank: null,  match_field: "normalized_name", match_type: "contains",
+  pattern: "DM DROGERIE", category: "FOOD & Households", priority: 10, confidence: 1.00 },
+{ bank: null,  match_field: "normalized_name", match_type: "contains",
+  pattern: "FITX",       category: "HEALTH",            priority: 10, confidence: 1.00 },
+{ bank: null,  match_field: "normalized_name", match_type: "contains",
+  pattern: "DB VERTRIEB", category: "TRANSPORT",        priority: 10, confidence: 1.00 },
+{ bank: null,  match_field: "normalized_name", match_type: "contains",
+  pattern: "SNCF",       category: "TRANSPORT",         priority: 10, confidence: 1.00 },
+{ bank: "BP",  match_field: "normalized_name", match_type: "contains",
+  pattern: "COMPO GMBH", category: "ARBEIT",            priority: 10, confidence: 1.00 },
+{ bank: "BP",  match_field: "normalized_name", match_type: "contains",
+  pattern: "TECHNIKER KRANKEN", category: "HEALTH",     priority: 10, confidence: 1.00 },
+{ bank: "TR",  match_field: "normalized_name", match_type: "contains",
+  pattern: "TRADEREPUBLIC", category: "SAVINGS",        priority: 10, confidence: 1.00 },
+
+// ── 50: TR merchant category codes (ISO 18245) — reliable ────
+{ bank: "TR", match_field: "mcc", match_type: "exact", pattern: "5411",
+  category: "FOOD & Households", priority: 50, confidence: 0.90 },  // grocery stores
+{ bank: "TR", match_field: "mcc", match_type: "exact", pattern: "5462",
+  category: "FOOD & Households", priority: 50, confidence: 0.90 },  // bakeries
+{ bank: "TR", match_field: "mcc", match_type: "exact", pattern: "5499",
+  category: "FOOD & Households", priority: 50, confidence: 0.90 },  // misc food stores
+{ bank: "TR", match_field: "mcc", match_type: "exact", pattern: "5812",
+  category: "PARTIES & Sorties", priority: 50, confidence: 0.85 },  // restaurants
+{ bank: "TR", match_field: "mcc", match_type: "exact", pattern: "5813",
+  category: "PARTIES & Sorties", priority: 50, confidence: 0.85 },  // bars / taverns
+{ bank: "TR", match_field: "mcc", match_type: "exact", pattern: "5814",
+  category: "PARTIES & Sorties", priority: 50, confidence: 0.85 },  // fast food
+{ bank: "TR", match_field: "mcc", match_type: "exact", pattern: "5912",
+  category: "HEALTH",            priority: 50, confidence: 0.90 },  // pharmacies
+{ bank: "TR", match_field: "mcc", match_type: "exact", pattern: "4112",
+  category: "TRANSPORT",         priority: 50, confidence: 0.90 },  // passenger rail
+{ bank: "TR", match_field: "mcc", match_type: "exact", pattern: "4784",
+  category: "TRANSPORT",         priority: 50, confidence: 0.90 },  // tolls / bridge fees
+{ bank: "TR", match_field: "mcc", match_type: "exact", pattern: "7523",
+  category: "TRANSPORT",         priority: 50, confidence: 0.90 },  // parking
+{ bank: "TR", match_field: "mcc", match_type: "exact", pattern: "4215",
+  category: "OTHERS-outflow",    priority: 50, confidence: 0.70 },  // courier services
+{ bank: "TR", match_field: "mcc", match_type: "exact", pattern: "8220",
+  category: "STUDIES",           priority: 50, confidence: 0.90 },  // universities
+
+// ── 90: C24's own taxonomy — a guess, never confirmed ────────
+{ bank: "C24", match_field: "bank_category", match_type: "exact",
+  pattern: "Lebensmittel",           category: "FOOD & Households", priority: 90, confidence: 0.50 },
+{ bank: "C24", match_field: "bank_category", match_type: "exact",
+  pattern: "Wohnen & Haushalt",      category: "HOUSING rent",      priority: 90, confidence: 0.50 },
+{ bank: "C24", match_field: "bank_category", match_type: "exact",
+  pattern: "DSL & Mobilfunk",        category: "PHONE bundle",      priority: 90, confidence: 0.50 },
+{ bank: "C24", match_field: "bank_category", match_type: "exact",
+  pattern: "Restaurant/ Café/ Bar",  category: "PARTIES & Sorties", priority: 90, confidence: 0.50 },
+{ bank: "C24", match_field: "bank_category", match_type: "exact",
+  pattern: "Freizeit & Unterhaltung", category: "HOBBIES",          priority: 90, confidence: 0.50 },
+{ bank: "C24", match_field: "bank_category", match_type: "exact",
+  pattern: "Geldanlage",             category: "SAVINGS",           priority: 90, confidence: 0.50 },
+{ bank: "C24", match_field: "bank_category", match_type: "exact",
+  pattern: "Einkommen",              category: "ARBEIT",            priority: 90, confidence: 0.50 },
+{ bank: "C24", match_field: "bank_category", match_type: "exact",
+  pattern: "Versicherungen",         category: "HEALTH",            priority: 90, confidence: 0.50 },
+{ bank: "C24", match_field: "bank_category", match_type: "exact",
+  pattern: "Shopping",               category: "OTHERS-outflow",    priority: 90, confidence: 0.40 },
+{ bank: "C24", match_field: "bank_category", match_type: "exact",
+  pattern: "Bargeld",                category: "OTHERS-outflow",    priority: 90, confidence: 0.30 },
+```
+
+The C24 block covers **all 13** `Kategorie` values present in the real exports, so every C24 row
+gets at least a guess. The seed resolves `category` labels to ids with one lookup query — never
+hardcode category ids in the rules seed, or reordering `02_categories.ts` silently re-points every
+rule.
+
+> ⚠️ **Still open — improves 4c's hit rate, does not block it.** Give ~10 more real
+> `pattern → category` pairs from your own spending. I will generate the rest from BP/C24 payee
+> frequency for you to correct.
+
+---
+
+##### M3 — `imports` (one row per file fed in)
+
+```ts
+export async function up(knex: Knex): Promise<void> {
+  await knex.schema.createTable("imports", (table) => {
+    table.increments("id").primary();
+    table.integer("account_id").notNullable()
+         .references("id").inTable("accounts");
+    table.string("filename").notNullable();
+    table.integer("row_count").notNullable().defaultTo(0);       // rows present in the file
+    table.integer("inserted_count").notNullable().defaultTo(0);  // actually new
+    table.integer("skipped_count").notNullable().defaultTo(0);   // duplicates rejected
+    table.decimal("statement_balance", 12, 2);                   // what the bank says — nullable
+    table.date("statement_date");
+    table.timestamp("imported_at").defaultTo(knex.fn.now());
+  });
+}
+
+export async function down(knex: Knex): Promise<void> {
+  await knex.schema.dropTable("imports");
+}
 ```
 
 Serves two features from one table: the dedupe audit trail *and* the reconciliation anchor.
-Folding `statement_balance` in here rather than a separate `account_statements` table is
-slightly impure (re-importing a file duplicates the balance record) but harmless at this scale —
-one table beats two.
+Folding `statement_balance` in here rather than a separate `account_statements` table is slightly
+impure (re-importing a file duplicates the balance record) but harmless at this scale — one table
+beats two.
+
+`statement_balance` / `statement_date` come from the BP header block (`Solde (EUROS)  2353,07`,
+`Date  15/02/2024`), which is why `bp.py` must stop throwing those 7 lines away — see 4c.
+
+**The three counts default to `0` on purpose.** There is a chicken-and-egg problem in 4c:
+`transactions.import_id` references `imports.id`, so the import row must exist *before* the
+transactions — but `inserted_count` is unknowable until *after* they are inserted. The sequence is
+INSERT with zeros → get `id` → insert transactions → `UPDATE` the counts, all inside one
+transaction so a mid-import crash leaves no half-written import row.
 
 ---
 
-#### M4 — `alterTable("transactions")`
+##### M4 — `alterTable("transactions")`
 
 Append-only on top of the Phase 2a table. **This is the migration that matters.**
 
@@ -2680,11 +3395,15 @@ export async function up(knex: Knex): Promise<void> {
     // --- categorization: rules, AI and manual all land in these four ---
     table.integer("category_id").references("id").inTable("categories");
     table.enu("category_source", ["rule", "ai", "manual"]);  // null = uncategorized
-    table.decimal("category_confidence", 3, 2);              // 0.00–1.00, AI only
+    table.decimal("category_confidence", 3, 2);              // 0.00–1.00
     table.timestamp("category_confirmed_at");                // null = TEMPORARY
 
     // --- matching key: search, rules and (later) the AI all read this ---
     table.string("normalized_name").notNullable().defaultTo("");
+
+    // --- provenance from the source export (added 2026-08-18) ---
+    table.string("external_id");     // TR's UUID, PayPal's Transaction ID — null for BP/C24
+    table.string("counterparty");    // clean payee, separate from the noisy raw_name
 
     // --- duplicate detection ---
     table.string("dedupe_hash").notNullable().defaultTo("");
@@ -2697,51 +3416,616 @@ export async function up(knex: Knex): Promise<void> {
     table.index("normalized_name");
     table.index("date");
     table.index("category_id");
+    table.index("account_id");
+  });
+}
+
+export async function down(knex: Knex): Promise<void> {
+  await knex.schema.alterTable("transactions", (table) => {
+    table.dropUnique(["dedupe_hash", "dedupe_seq"]);
+    table.dropColumns(
+      "account_id", "import_id", "source_file", "imported_at",
+      "category_id", "category_source", "category_confidence", "category_confirmed_at",
+      "normalized_name", "external_id", "counterparty",
+      "dedupe_hash", "dedupe_seq", "transfer_pair_id",
+    );
   });
 }
 ```
 
-**`dedupe_seq` exists because a naive unique hash is wrong.** Two €2.50 coffees at the same
-shop on the same day are two real transactions, not a duplicate. So:
+###### `dedupe_seq` exists because a naive unique hash is wrong — and your real data proves it
+
+Two €2.50 coffees at the same shop on the same day are two real transactions, not a duplicate.
+Measured across your 11 BP exports on 2026-08-18:
 
 ```
-dedupe_hash = sha256(f"{account_id}|{date}|{amount}|{raw_name}")
-dedupe_seq  = 0, 1, 2… numbering identical rows within a single import file
+1484 rows total · 832 distinct · 464 (date, name, amount) triples shared BETWEEN files
+                                  26 rows duplicated WITHIN a single file
 ```
 
-Re-import an overlapping export → the same rows compute the same `(hash, seq)` → the unique
-constraint rejects them. A genuinely new third coffee gets `seq = 2` and inserts fine.
-~10 lines of Python, and it is the difference between a database you trust and one you don't.
+Those 26 are real: **three** €13.00 `BEER KING` charges on 12/03/2024, **three** €5.00
+`CREDIT CARTE BANCAIRE DOCKLAND GMBH` on 02/05/2024. A hash-only unique constraint silently eats
+them. So:
 
-**`normalized_name`** — `raw_name` uppercased, punctuation and reference numbers stripped:
-`"CARTE 12/05 LIDL 4783//DE"` → `"LIDL"`. One column, four features get better: search matches,
-rules match, recurring detection groups (Phase 9), and the AI sees ~200 distinct strings instead
-of ~900 (cheaper, more consistent — Phase 10).
+```
+dedupe_hash = sha256(f"{account_id}|{date:%Y-%m-%d}|{amount:.2f}|{raw_name}")
+dedupe_seq  = 0, 1, 2… numbering identical hashes within a single import file
+```
+
+Walk the BEER KING case through it:
+
+| Import | File contains | Computed `(hash, seq)` | Result |
+|---|---|---|---|
+| 1st | 3 identical rows | `(h,0) (h,1) (h,2)` | 3 inserted |
+| 2nd (overlapping export) | same 3 rows | `(h,0) (h,1) (h,2)` | 3 rejected by the unique constraint |
+| 3rd (a 4th beer happened) | 4 identical rows | `(h,0) (h,1) (h,2) (h,3)` | 3 rejected, **1 inserted** ✓ |
+
+It is order-independent (identical rows are indistinguishable, so which one gets `seq = 0`
+does not matter) and direction-independent (importing the 4-row file first, then the 3-row file,
+also lands on 4 rows). ~10 lines of Python, and it is the difference between a database you trust
+and one you don't.
+
+> **Hash `raw_name`, never `normalized_name`.** The normalizer *will* be improved — Phase 9's
+> recurring detection wants tighter grouping. If the hash reads `normalized_name`, that
+> improvement silently changes every historical hash, and the next re-import of an old export
+> inserts all 832 rows again as "new". Hash the raw, match on the normalized. This is the single
+> easiest way to destroy the dataset in week 4.
+
+**Trade Republic is the exception** (4d): its export ships a native stable `transaction_id` UUID.
+For TR, `dedupe_hash = transaction_id` and `dedupe_seq` stays `0` forever. Better than any hash
+you can compute, and it doubles as an independent check on the sha256 path.
+
+###### The other columns
+
+**`normalized_name`** — `raw_name` uppercased, punctuation, dates, amounts and card references
+stripped: `"ACHAT CB Lidl sagt Dank 13.12.23 EUR    62,50 CARTE NO  454  "` → `"LIDL SAGT DANK"`.
+One column, four features get better: search matches, rules match, recurring detection groups
+(Phase 9), and the AI sees ~200 distinct strings instead of ~900 (Phase 10).
+
+**`external_id` + `counterparty`** (added 2026-08-18) — four lines now, a painful backfill later.
+`external_id` makes TR dedupe exact and is the join key PayPal enrichment needs.
+`counterparty` holds the clean payee (`Bolt Operations OÜ`) apart from the noisy `raw_name`.
+
+> **The PayPal problem, recorded here so it is not rediscovered.** 77 of your 832 distinct BP rows
+> (9.3%, €4 675.22) are `ACHAT CB PAYPAL` with the merchant truncated to 6 characters —
+> `PAYPAL  BOLT.E`, `PAYPAL  Julian`, `PAYPAL  PMNTSB`. They are permanently uncategorizable from
+> BP alone. PayPal's own export is the decoder ring, **but it must not be imported as an account**:
+> every purchase appears there twice (the payment *and* a `General Card Deposit` funding row that
+> nets to zero) plus a third time as the card charge in BP. Importing it counts each purchase 3×.
+> The correct shape is an enrichment join — match on `(date ± 2 days, amount)`, overwrite
+> `normalized_name` and `counterparty` — deferred to post-launch, ~0.5 session.
 
 **Do not add `'transfer'` to the `flow` enum.** `flow` is the sign of the amount — a transfer is
-still an outflow on one side and an inflow on the other. Transfer-ness belongs on `categories.type`.
-Also note Knex's `table.enu()` compiles on Postgres to a varchar + CHECK constraint, so extending
-one later means dropping and recreating that constraint — another reason to get the values right now.
+still an outflow on one side and an inflow on the other. Transfer-ness belongs on
+`categories.type`. And since Knex's `table.enu()` compiles on Postgres to a `varchar` + `CHECK`,
+extending it later means dropping and recreating that constraint in a new migration.
 
 ---
 
-#### Checklist
+##### Step 4b.4 — Shared TS types
 
-- [ ] **Create the sample fixtures first** — `data/sample/sample_bp.tsv`, `data/sample/sample_c24.csv`. Synthetic: fake payees, rounded amounts, but **byte-identical format** to the real thing (ISO-8859-1 + 7-row header for BP; UTF-8 BOM + semicolon for C24), including at least one deliberate duplicate row and one same-day same-amount pair to exercise `dedupe_seq`.
-- [ ] Migrations M1 → M4, run in order
-- [ ] Seed `accounts`: BP + C24 rows with real `opening_balance` / `opening_balance_date` (§5.0 risk 4)
-- [ ] Seed `categories` from the `FOLGUNG_der_Kontos_WIP.xlsx` taxonomy, with correct `type` — **every internal-transfer category must be `type = 'transfer'`** or Phase 6's totals will lie
-- [ ] Seed `category_rules` from the existing Excel mapping
-- [ ] `db_insert.py`: compute `normalized_name` → `dedupe_hash` → `dedupe_seq`, match `category_rules`, insert with `ON CONFLICT (dedupe_hash, dedupe_seq) DO NOTHING`, write the `imports` row with real counts
-- [ ] Verify on sample: row counts, dates, amounts — then **re-run the same file** and confirm `inserted_count = 0`, `skipped_count = row_count`
-- [ ] Verify on real BP + C24 exports, then re-run with a deliberately overlapping export
+`backend/src/db/schema.ts` — one place the whole backend agrees on the row shapes. Written now,
+consumed by Phase 5's controllers.
 
-**4 done when:** importing the same file twice adds nothing the second time, and the `imports`
-table shows honest inserted/skipped counts.
+```ts
+export type CategoryType = "income" | "expense" | "transfer";
+export type CategorySource = "rule" | "ai" | "manual";
+export type Flow = "income" | "expense";
 
-**Learning outcome:** full Knex migration workflow including `alterTable`, FK design, unique
-constraints as a correctness guarantee rather than a formality, and Python writing directly
-to Postgres with conflict handling.
+export type Account = {
+  id: number;
+  bank: string;
+  account_type: string;
+  currency: string;
+  label: string;
+  opening_balance: string;      // Knex returns numeric as string — cast at the edge
+  opening_balance_date: string | null;
+  is_tracked: boolean;
+};
+
+export type TransactionRow = {
+  id: number;
+  account_id: number | null;
+  import_id: number | null;
+  date: string;
+  raw_name: string;
+  normalized_name: string;
+  counterparty: string | null;
+  external_id: string | null;
+  amount: string;
+  flow: Flow;
+  category_id: number | null;
+  category_source: CategorySource | null;
+  category_confidence: string | null;
+  category_confirmed_at: string | null;
+  dedupe_hash: string;
+  dedupe_seq: number;
+  transfer_pair_id: number | null;
+  source_file: string | null;
+  imported_at: string;
+};
+```
+
+---
+
+##### Tests — `backend/test/migrations.test.ts`
+
+`globalSetup.ts` already ran `migrate.latest()` + `seed.run()`, so these assert on the result.
+
+```ts
+import { describe, test, expect, afterAll } from "vitest";
+import { db } from "../src/db/knex.js";
+
+afterAll(async () => { await db.destroy(); });
+
+describe("schema", () => {
+  test("all five tables exist", async () => {
+    for (const t of ["accounts", "categories", "category_rules", "imports", "transactions"]) {
+      expect(await db.schema.hasTable(t)).toBe(true);
+    }
+  });
+
+  test("the dedupe unique constraint is enforced", async () => {
+    const base = {
+      date: "2026-03-12", raw_name: "BEER KING", amount: -13, flow: "expense",
+      account_id: 1, dedupe_hash: "abc123", dedupe_seq: 0,
+    };
+    await db("transactions").insert(base);
+    // same hash, next seq → a genuinely different transaction, must insert
+    await db("transactions").insert({ ...base, dedupe_seq: 1 });
+    // same hash AND same seq → must be rejected
+    await expect(db("transactions").insert(base)).rejects.toThrow();
+  });
+
+  test("every transfer category is typed 'transfer'", async () => {
+    const rows = await db("categories")
+      .whereIn("label", ["SAVINGS", "INVESTING", "BALU", "C24 pockets"]);
+    expect(rows).toHaveLength(4);
+    expect(rows.every((r) => r.type === "transfer")).toBe(true);
+  });
+
+  test("every rule points at a category that exists", async () => {
+    const orphans = await db("category_rules as r")
+      .leftJoin("categories as c", "r.category_id", "c.id")
+      .whereNull("c.id");
+    expect(orphans).toHaveLength(0);
+  });
+
+  test("seeds are idempotent", async () => {
+    const before = await db("categories").count();
+    await db.seed.run();
+    expect(await db("categories").count()).toEqual(before);
+  });
+});
+```
+
+The third test is the one that protects Phase 6. The fifth is the one that protects every future
+`npm test`.
+
+**DoD 4b**
+```bash
+docker compose exec app npx knex migrate:latest  --knexfile knexfile.ts
+docker compose exec app npx knex migrate:rollback --knexfile knexfile.ts --all
+docker compose exec app npx knex migrate:latest  --knexfile knexfile.ts
+docker compose exec app npx knex seed:run        --knexfile knexfile.ts
+docker compose exec app npm test
+```
+- `migrate:rollback --all` — run every migration's `down()` in reverse order. **If any `down()` is
+  missing or wrong, this is where you find out** — not at 2am against the Railway database.
+
+Round-trip clean, seeds run twice with no duplicates, `migrations.test.ts` green.
+
+---
+
+#### Phase 4c — ETL core: normalize → hash → categorize → insert (BP + C24)
+**1.25 sessions** · *The highest-risk step in the plan. Run against `data/sample/` until it is
+boring, then against real data.*
+
+##### Files
+
+```
+backend/python/bank/normalize.py     NEW    raw_name → normalized_name
+backend/python/bank/dedupe.py        NEW    hash + seq
+backend/python/bank/categorize.py    NEW    the rules loop
+backend/python/bank/db_insert.py     NEW    the only file that talks to Postgres
+backend/python/bank/bp.py            EDIT   return the header block, drop the pd.to_numeric detour
+backend/python/bank/c24.py           EDIT   surface Kategorie + Zahlungsempfänger
+backend/python/bank/test_etl.py      NEW    pytest, no DB required
+backend/python/requirements.txt      NEW    pandas, psycopg2-binary, pytest
+```
+
+One module per verb, each independently testable. `db_insert.py` is the only one that opens a
+connection — the other three are pure functions over strings and DataFrames, so `test_etl.py`
+runs without Postgres at all.
+
+---
+
+##### Step 4c.1 — `normalize.py` (pure, no DB, testable first)
+
+```python
+import re
+
+# Order matters: strip the noisiest patterns before collapsing whitespace.
+_PREFIXES = re.compile(
+    r"^(ACHAT CB|PRELEVEMENT DE|PRLV SEPA|VIREMENT INSTANTANE (DE|A|POUR)|"
+    r"VIREMENT (DE|POUR)|RETRAIT|CREDIT CARTE BANCAIRE)\s+", re.I)
+_CARD_REF  = re.compile(r"\s*CARTE (NO|NUMERO)\s+\d+\s*$", re.I)
+_AMOUNT    = re.compile(r"\s*EUR\s+[\d\s.,]+", re.I)
+_DATE      = re.compile(r"\b\d{2}[./]\d{2}[./]\d{2,4}\b")
+_REF       = re.compile(r"\bREF\s*:.*$", re.I)
+_PUNCT     = re.compile(r"[^A-Z0-9&\s]")
+_WS        = re.compile(r"\s+")
+
+def normalize(raw: str) -> str:
+    """'ACHAT CB Lidl sagt Dank 13.12.23 EUR   62,50 CARTE NO  454  ' -> 'LIDL SAGT DANK'"""
+    s = (raw or "").strip().strip('"')
+    s = _CARD_REF.sub("", s)
+    s = _AMOUNT.sub("", s)
+    s = _DATE.sub("", s)
+    s = _REF.sub("", s)
+    s = _PREFIXES.sub("", s)
+    s = s.upper()
+    s = _PUNCT.sub(" ", s)
+    return _WS.sub(" ", s).strip()
+```
+
+**Tests first — this is the cheapest thing in the phase to get right and the most expensive to get
+wrong** (it feeds search, rules, Phase 9 grouping and Phase 10 costs):
+
+```python
+import pytest
+from normalize import normalize
+
+@pytest.mark.parametrize("raw,expected", [
+    ('ACHAT CB Lidl sagt Dank 13.12.23 EUR         62,50 CARTE NO  454  ', "LIDL SAGT DANK"),
+    ('ACHAT CB PAYPAL  DBVERT 18.08.24 CARTE NUMERO                454  ', "PAYPAL DBVERT"),
+    ('VIREMENT DE COMPO GmbH Lohn/Gehalt 12345',                           "COMPO GMBH LOHN GEHALT 12345"),
+    ('PRELEVEMENT DE FitX Deutschland REF : 64--0028-0008121 / 64-204',    "FITX DEUTSCHLAND"),
+    ('"VIREMENT DEBIT"',                                                    "VIREMENT DEBIT"),
+    ('ACHAT CB CAFÉ DES ARTS 01.03.26 EUR  8,50 CARTE NO  111  ',          "CAF DES ARTS"),
+    ('', ""),
+    (None, ""),
+])
+def test_normalize(raw, expected):
+    assert normalize(raw) == expected
+```
+
+Note the `CAFÉ → CAF` case: `_PUNCT` strips non-ASCII. That is a **deliberate, asserted** choice —
+accents are inconsistent across banks, so dropping them makes matching more reliable, not less.
+The accented fixture row proves the file *decoded* correctly (you'd get `CAFÃ` on a bad decode,
+which the test catches); the normalizer then flattens it on purpose.
+
+**DoD 4c.1:** `pytest backend/python/bank/test_etl.py -k normalize` green. No database involved.
+
+---
+
+##### Step 4c.2 — `dedupe.py`
+
+```python
+import hashlib
+from collections import defaultdict
+
+def compute_hash(account_id: int, date, amount: float, raw_name: str) -> str:
+    """Hash the RAW name, never the normalized one — see M4."""
+    key = f"{account_id}|{date:%Y-%m-%d}|{amount:.2f}|{raw_name}"
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+def assign_seq(hashes: list[str]) -> list[int]:
+    """0,1,2… numbering identical hashes within ONE import file."""
+    seen = defaultdict(int)
+    out = []
+    for h in hashes:
+        out.append(seen[h])
+        seen[h] += 1
+    return out
+```
+
+`f"{amount:.2f}"` is not cosmetic: `-13` and `-13.0` are the same float but different strings, and
+a different string is a different hash. Fixing the precision at the hash boundary is what makes
+the value stable across pandas dtype changes.
+
+```python
+def test_assign_seq_numbers_identical_rows():
+    assert assign_seq(["a", "a", "a", "b"]) == [0, 1, 2, 0]
+
+def test_hash_is_stable_across_int_and_float_amounts():
+    from datetime import date
+    a = compute_hash(1, date(2026, 3, 12), -13,   "BEER KING")
+    b = compute_hash(1, date(2026, 3, 12), -13.0, "BEER KING")
+    assert a == b
+
+def test_hash_changes_with_account():
+    from datetime import date
+    assert compute_hash(1, date(2026, 3, 12), -13, "X") != \
+           compute_hash(2, date(2026, 3, 12), -13, "X")
+```
+
+**DoD 4c.2:** the three tests pass.
+
+---
+
+##### Step 4c.3 — `categorize.py` (the rules loop)
+
+Reads the rules **once** into memory, then matches in Python. ~30 rules × ~1000 rows is 30k
+string operations — instant, and one query beats a thousand round-trips.
+
+```python
+def load_rules(cur) -> list[dict]:
+    cur.execute("""
+        SELECT bank, match_field, match_type, pattern, category_id, confidence
+        FROM category_rules
+        ORDER BY priority ASC, id ASC
+    """)
+    return [dict(zip([c.name for c in cur.description], r)) for r in cur.fetchall()]
+
+def match(row: dict, bank: str, rules: list[dict]) -> tuple[int | None, float | None]:
+    """Returns (category_id, confidence). First hit wins — rules are priority-ordered."""
+    for r in rules:
+        if r["bank"] is not None and r["bank"] != bank:
+            continue
+        haystack = {
+            "normalized_name": row.get("normalized_name") or "",
+            "bank_category":   row.get("bank_category") or "",
+            "mcc":             str(row.get("mcc") or ""),
+        }[r["match_field"]]
+        if not haystack:
+            continue
+        hit = (r["pattern"].upper() in haystack.upper()
+               if r["match_type"] == "contains"
+               else haystack.strip().casefold() == r["pattern"].strip().casefold())
+        if hit:
+            return r["category_id"], float(r["confidence"])
+    return None, None
+```
+
+A match sets `category_source = 'rule'` and leaves **`category_confirmed_at = NULL`** — the guess
+is not a decision. Phase 5 renders those with a dashed chip border; clicking a category sets
+`source = 'manual'` and stamps `confirmed_at`.
+
+```python
+def test_priority_beats_bank_fallback():
+    rules = [
+        {"bank": None,  "match_field": "normalized_name", "match_type": "contains",
+         "pattern": "LIDL", "category_id": 1, "confidence": 1.0},
+        {"bank": "C24", "match_field": "bank_category",   "match_type": "exact",
+         "pattern": "Shopping", "category_id": 9, "confidence": 0.4},
+    ]
+    row = {"normalized_name": "LIDL SAGT DANK", "bank_category": "Shopping"}
+    assert match(row, "C24", rules) == (1, 1.0)   # explicit rule wins
+
+def test_bank_scoped_rule_ignored_for_other_bank():
+    rules = [{"bank": "BP", "match_field": "normalized_name", "match_type": "contains",
+              "pattern": "COMPO", "category_id": 11, "confidence": 1.0}]
+    assert match({"normalized_name": "COMPO GMBH"}, "C24", rules) == (None, None)
+
+def test_no_match_returns_none():
+    assert match({"normalized_name": "SOMETHING NEW"}, "BP", []) == (None, None)
+```
+
+**DoD 4c.3:** the three tests pass. Note all of 4c.1–4c.3 run with **zero database** — that is the
+point of splitting the modules this way.
+
+---
+
+##### Step 4c.4 — `db_insert.py` (the only module that touches Postgres)
+
+```bash
+python3 backend/python/bank/db_insert.py \
+    --bank BP \
+    --account 1 \
+    --file data/sample/sample_bp.tsv
+```
+- `--bank` — selects the parser (`bp.py` / `c24.py` / `tr.py`) **and** scopes the rule lookup.
+- `--account` — the `accounts.id` this file belongs to. **Required, no default.** No export
+  carries a pocket marker, so this is the only thing that can distinguish `C24 Pocket Food` from
+  `C24 Girokonto`. Guessing it wrong silently files a month of groceries under the rent pocket.
+- `--file` — the export to read.
+- `--dry-run` (add it) — parse, normalize, categorize, print the counts, insert nothing. This is
+  what you run first against real data.
+
+Reads `DATABASE_URL` from the environment, so the same script targets dev, test, or the Railway
+database in 8a with no code change.
+
+The whole thing in one transaction:
+
+```python
+with conn:                                   # commits on exit, rolls back on exception
+    with conn.cursor() as cur:
+        # 1. import row first — transactions.import_id references it.
+        #    Counts start at 0; they aren't knowable until after the insert.
+        cur.execute("""
+            INSERT INTO imports (account_id, filename, row_count,
+                                 statement_balance, statement_date)
+            VALUES (%s, %s, %s, %s, %s) RETURNING id
+        """, (account_id, filename, len(df), stmt_balance, stmt_date))
+        import_id = cur.fetchone()[0]
+
+        # 2. ON CONFLICT DO NOTHING turns the unique constraint into the
+        #    dedupe mechanism. RETURNING id yields ONLY the rows that
+        #    actually inserted — so len(result) IS inserted_count.
+        inserted = execute_values(cur, """
+            INSERT INTO transactions
+              (account_id, import_id, date, raw_name, normalized_name, counterparty,
+               external_id, amount, flow, category_id, category_source,
+               category_confidence, dedupe_hash, dedupe_seq, source_file)
+            VALUES %s
+            ON CONFLICT (dedupe_hash, dedupe_seq) DO NOTHING
+            RETURNING id
+        """, rows, fetch=True)
+
+        # 3. now the counts are known
+        cur.execute("""
+            UPDATE imports SET inserted_count = %s, skipped_count = %s WHERE id = %s
+        """, (len(inserted), len(df) - len(inserted), import_id))
+```
+
+**`ON CONFLICT … DO NOTHING` is the entire dedupe implementation.** The Python computes the key;
+Postgres enforces it. The constraint cannot be bypassed by a bug in a later script, by a manual
+`psql` insert, or by the Phase 7 mobile import — which is exactly why this is a database constraint
+and not an `if row in existing:` check.
+
+`bp.py` also needs a small change: it currently discards the 7-line header with `skiprows=7`.
+`Solde (EUROS)` and `Date` from that block are `imports.statement_balance` / `statement_date`, the
+anchor Phase 6's reconciliation view needs. Read the header separately, then parse the body.
+
+---
+
+##### Integration test — `backend/test/import.test.ts`
+
+The Vitest side asserts on the *result* of an import, using rows inserted directly (no Python in
+the test path — the Python is covered by pytest).
+
+```ts
+test("re-importing the same file inserts nothing", async () => {
+  const rows = sampleBpRows();                       // fixture, already hashed + sequenced
+  const [imp1] = await db("imports").insert(
+    { account_id: 1, filename: "sample_bp.tsv", row_count: rows.length }).returning("id");
+  const ins1 = await db("transactions")
+    .insert(rows.map((r) => ({ ...r, import_id: imp1.id })))
+    .onConflict(["dedupe_hash", "dedupe_seq"]).ignore().returning("id");
+  expect(ins1).toHaveLength(rows.length);
+
+  const [imp2] = await db("imports").insert(
+    { account_id: 1, filename: "sample_bp.tsv", row_count: rows.length }).returning("id");
+  const ins2 = await db("transactions")
+    .insert(rows.map((r) => ({ ...r, import_id: imp2.id })))
+    .onConflict(["dedupe_hash", "dedupe_seq"]).ignore().returning("id");
+  expect(ins2).toHaveLength(0);                      // ← the whole phase in one assertion
+});
+
+test("three identical rows all insert, via dedupe_seq", async () => { /* seq 0,1,2 */ });
+test("same date + amount, different name → both insert", async () => { /* … */ });
+```
+
+**DoD 4c**
+```bash
+# sample, dry run
+python3 backend/python/bank/db_insert.py --bank BP --account 1 --file data/sample/sample_bp.tsv --dry-run
+# sample, for real
+python3 backend/python/bank/db_insert.py --bank BP --account 1 --file data/sample/sample_bp.tsv
+# again — this is the test
+python3 backend/python/bank/db_insert.py --bank BP --account 1 --file data/sample/sample_bp.tsv
+# the overlap file
+python3 backend/python/bank/db_insert.py --bank BP --account 1 --file data/sample/sample_bp_overlap.tsv
+```
+```sql
+SELECT filename, row_count, inserted_count, skipped_count FROM imports ORDER BY id;
+```
+Required output:
+
+| filename | row_count | inserted_count | skipped_count |
+|---|---|---|---|
+| sample_bp.tsv | 12 | 12 | 0 |
+| sample_bp.tsv | 12 | **0** | **12** |
+| sample_bp_overlap.tsv | 8 | **3** | **5** |
+
+Plus: `pytest` green, `npm test` green, and the three-identical-rows fixture present as three rows
+with `dedupe_seq` 0, 1, 2. Repeat the whole sequence for C24 before moving on.
+
+---
+
+#### Phase 4d — Trade Republic
+**0.75 session** · *Cut this first if a session is lost. Everything else is load-bearing.*
+
+TR is not an investment account any more — it is the 2026 daily card (`ALDI SUED`, `REWE`,
+`DM DROGERIE`, `SNCF-VOYAGEURS`, `Coffee Fellows`). Excluding it makes current-year totals wrong.
+
+##### Files
+
+```
+backend/python/bank/tr.py                NEW    ~40 lines
+backend/python/bank/db_insert.py         EDIT   --bank TR branch
+backend/src/db/seeds/03_category_rules.ts EDIT  MCC block already written in 4b
+data/sample/sample_tr.csv                READY  built in 4a.3
+```
+
+##### What differs from `bp.py` / `c24.py`
+
+| Difference | Cost |
+|---|---|
+| Tab-delimited, real header row | 1 line |
+| `M/D/YYYY` dates → `dayfirst=False` | 1 line |
+| `.` decimal separator | 0 lines — simpler than the other two |
+| Cash movement = `amount + fee + tax` (three separate columns) | 3 lines |
+| Row-type filter on the `type` column | ~8 lines |
+
+##### Row-type handling — the only real decision
+
+| `type` | Treatment | Category |
+|---|---|---|
+| `CARD_TRANSACTION` | real spending | from `mcc_code` rule (priority 50) |
+| `TRANSFER_*_INBOUND` | the receiving half of a BP/C24 transfer | `SAVINGS` (`transfer`) |
+| `BUY` / `SELL` | **cash side only**: `amount + fee` as one row | `INVESTING` (`transfer`) |
+| `CARD_ORDERING_FEE` | real cost | `OTHERS-outflow` |
+
+A `BUY` moves cash out of the TR *cash* balance into securities — not spending. Importing the cash
+side keeps the TR balance reconcilable while leaving expense totals clean. The €1 order fee is a
+real cost and rides in the same row. No `shares` / `price` / `symbol` columns: that is portfolio
+tracking, a different product.
+
+##### Dedupe — the easy path
+
+```python
+dedupe_hash = row["transaction_id"]   # native stable UUID
+dedupe_seq  = 0                       # always
+```
+
+No sha256, no collisions, and it is an **independent check on the 4c hash design**: if TR imports
+cleanly twice and BP does not, the bug is in `compute_hash`, not in the constraint.
+
+Flip `accounts.id = 6` to `is_tracked = true` in `01_accounts.ts` when this lands.
+
+**DoD 4d:** `sample_tr.csv` imports; re-import inserts 0; a `CARD_TRANSACTION` with `mcc_code`
+`5411` lands in `FOOD & Households` with `confidence = 0.90` and `category_confirmed_at IS NULL`;
+a `BUY` row lands as one `INVESTING` transaction whose amount equals `amount + fee`.
+
+---
+
+#### Phase 4e — Real data + reconciliation
+**0.5 session** · *Only start when 4c is boring against sample data.*
+
+- [ ] Point `ETL_INPUT_DIR` at the real exports. **Read the path from the environment, never
+      hardcode a relative path** — 8a runs this same script against the Railway database from a
+      different working directory.
+- [ ] `--dry-run` every real file first. Compare printed row counts against
+      `wc -l <file>` minus the header.
+- [ ] Import BP: 11 files, one `--account 1` run each. Expected across all of them:
+      **1484 rows read, 832 inserted, 652 skipped.** Those numbers are measured, not estimated —
+      if you land anywhere else, stop and diff before importing C24.
+- [ ] Confirm the 26 within-file duplicates survived: rows with `dedupe_seq > 0` must number 26.
+- [ ] Import C24: one run per account (`--account 2`…`5`), one file at a time.
+- [ ] Re-run one deliberately overlapping BP export. `inserted_count` must be 0.
+- [ ] Spot-check categorization: `SELECT count(*) FROM transactions WHERE category_id IS NULL`.
+      Expect 30–40% uncategorized — that is the manual review queue Phase 5 exists to drain. If it
+      is >70%, the normalizer is over-stripping; if it is <10%, a rule is matching too broadly.
+- [ ] Sanity query, and the one that catches a wrong `--account`:
+```sql
+SELECT a.label, count(*), min(t.date), max(t.date), sum(t.amount)
+FROM transactions t JOIN accounts a ON a.id = t.account_id
+GROUP BY a.label ORDER BY a.label;
+```
+
+**⚠️ Before the first real import:** `git status` and confirm nothing under `data/real/` is staged.
+The repo is public.
+
+---
+
+#### Phase 4 — done when
+
+Importing the same file twice adds nothing the second time; the `imports` table shows honest
+inserted/skipped counts; `npm test` runs against `db-unifin-test` and leaves the dev database
+untouched; and `SELECT count(*) FROM transactions` returns 832 for BP with 26 rows carrying
+`dedupe_seq > 0`.
+
+**Deferred out of Phase 4 (recorded so it is not rediscovered):**
+PayPal enrichment join (~0.5 session, post-launch) · rules learning-loop UI (Phase 5, already cut
+in §5.0) · `recurring_series` (Phase 9) · `categories.parent_id` (only if the flat list starts
+hurting).
+
+**Learning outcome:** full Knex migration workflow including `alterTable`, FK design and reversible
+`down()` migrations; unique constraints as a correctness guarantee rather than a formality; test
+database isolation via injected env vars; and Python writing directly to Postgres with conflict
+handling inside a single transaction.
 
 ---
 
@@ -2849,7 +4133,7 @@ most transferable thing in this repo, and the piece CREA forks verbatim.
 
 *Makes the app usable on the phone, and removes the manual terminal step from importing.*
 
-- [ ] `POST /import` endpoint: file upload (multer), Node spawns Python `db_insert.py` via `child_process`
+- [ ] `POST /import` endpoint: file upload (multer), Node spawns Python `db_insert.py` via `child_process` — **read the security contract below before writing a line of it**
 - [ ] `ImportPage`: file picker **+ drag-and-drop** (`onDragOver` / `onDrop` + `e.dataTransfer.files` — ~20 lines on top of the picker), bank selector (BP / C24)
 - [ ] Import result feedback surfaces the dedupe counts from the `imports` row: `"312 rows · 47 new · 265 duplicates skipped"`
 - [ ] Transactions table → mobile card list (`useIsMobile()` hook, same pattern as portfolio)
@@ -2857,8 +4141,58 @@ most transferable thing in this repo, and the piece CREA forks verbatim.
 - [ ] Overview + reconciliation readable on a small screen
 - [ ] Test on a real device
 
+#### Security contract for `POST /import` (written 2026-08-18)
+
+**`ETL_INPUT_DIR` and the upload are two different code paths.** The env var is only where the
+*CLI* looks for files when you run it from a terminal (Phase 4e, 8a). It is a directory path, not a
+secret, and it never holds file contents. An uploaded file never touches it:
+
+```
+Terminal (4e/8a):  you → db_insert.py --file $ETL_INPUT_DIR/bp_march.tsv → Postgres
+App upload (7):    browser → POST /api/imports (multipart)
+                           → multer writes to os.tmpdir()/<uuid>.tsv
+                           → spawn("python3", ["db_insert.py", "--file", tmpPath, …])
+                           → delete tmp file
+                           → respond with the imports row counts
+```
+
+Eight rules. The first two are the ones that turn a personal tool into a remote shell if you get
+them wrong:
+
+1. **`spawn` with an argv array, never `exec` with a template string.** `exec` runs the command
+   through `/bin/sh`, so a filename containing `; rm -rf /` executes. `spawn("python3", [...])`
+   passes argv straight to the kernel — there is no shell to inject into.
+   ```ts
+   // ✗ shell injection
+   exec(`python3 db_insert.py --file ${path} --bank ${bank}`);
+   // ✓ no shell involved
+   spawn("python3", ["db_insert.py", "--file", path, "--bank", bank], { timeout: 30_000 });
+   ```
+2. **Never build a path from `req.file.originalname`.** A browser can send
+   `../../../app/.env` as a filename. Generate the temp name yourself
+   (`crypto.randomUUID()`); keep the original only as a display string in `imports.filename`.
+3. **Route behind `requireAuth`.** Single user, existing middleware, non-negotiable.
+4. **Validate `--account` server-side.** It is an integer from the client. `SELECT 1 FROM accounts
+   WHERE id = ?` before spawning, or a typo files a month of groceries against an arbitrary id.
+5. **Cap size and extension** — `multer({ limits: { fileSize: 5 * 1024 * 1024 } })` and reject
+   anything that is not `.csv` / `.tsv`. A 4 GB upload is a one-request DoS on a Railway free-tier
+   container. Extension checking is *not* security, it is a sanity filter; the real guard is 1–3.
+6. **Temp dir outside the repo and outside anything served.** `os.tmpdir()`, deleted in a
+   `finally` so a parse crash does not leave bank data on disk. Railway's filesystem is ephemeral
+   anyway, which helps.
+7. **Timeout the spawn** (`{ timeout: 30_000 }`) and cap stdout. A malformed CSV can make pandas
+   sit forever, and a hung child holds a connection open.
+8. **Never pass file contents through an environment variable.** Env is capped around 128 KB
+   (`ARG_MAX`), readable by any process in the container via `/proc/<pid>/environ`, and routinely
+   captured by platform logging. Files go on disk or through stdin. Env holds *configuration*.
+
+On secrets generally: `ETL_INPUT_DIR` is a path and needs no protection. The variables that are
+actually secret are `DATABASE_URL`, `JWT_SECRET` and `ADMIN_PASSWORD_HASH` — gitignored in
+`backend/.env`, set as Railway variables in prod, and **different values in prod than in dev** (8a).
+
 **Learning outcome:** file upload in Express, `child_process` Python interop (watch the venv
-and path handling inside Docker), responsive Tailwind layout.
+and path handling inside Docker), the shell-injection boundary between `exec` and `spawn`,
+responsive Tailwind layout.
 
 ---
 

@@ -97,8 +97,10 @@ See `PLAN_unifin.md` for the full phased plan. Always check which phase is activ
 Note the deploy split: 8a puts the app live in week 3, when it's still small.
 Phases 7 (mobile), 9 (recurring) and 10 (AI categorizer) are post-launch, shipped as updates.
 
-**Current status: Phases 1 and 2 complete (frontend shell + routing + tests, Docker, Knex,
-Express CRUD, JWT auth). Phase 3 next. Target: deployed `v1.0.0` by mid-September 2026.**
+**Current status: Phases 1, 2 and 3 complete (frontend shell + routing + tests, Docker, Knex,
+Express CRUD, JWT auth, AuthContext + RequireAuth, Vite `/api` proxy, `GET /health`).
+Phase 4 active — planned in detail 2026-08-18 as 4a→4e. Target: deployed `v1.0.0` by
+mid-September 2026.**
 
 ## Project structure (target)
 
@@ -154,8 +156,29 @@ unifin/
 ## Schema (source of truth)
 
 ```
-accounts        — id, bank, account_type, currency, label
-transactions    — id, account_id, date, raw_name, amount, flow, category_id (nullable), source_file, imported_at
+accounts        — id, bank, account_type, currency, label,
+                  opening_balance, opening_balance_date, is_tracked
+transactions    — id, account_id, import_id, date, raw_name, normalized_name,
+                  counterparty, external_id, amount, flow,
+                  category_id (nullable), category_source, category_confidence,
+                  category_confirmed_at, dedupe_hash, dedupe_seq,
+                  transfer_pair_id, source_file, imported_at
 categories      — id, label, type (income/expense/transfer), visible
-category_rules  — id, pattern, category_id, priority
+category_rules  — id, bank, match_field, match_type, pattern,
+                  category_id, priority, confidence
+imports         — id, account_id, filename, row_count, inserted_count,
+                  skipped_count, statement_balance, statement_date, imported_at
 ```
+
+Full column list, reasoning and migration code live in **PLAN_unifin.md → Phase 4b**.
+
+Non-obvious invariants — break these and Phase 6's totals lie:
+- `UNIQUE(dedupe_hash, dedupe_seq)` is the duplicate-rejection mechanism. `dedupe_hash` is computed
+  from **`raw_name`, never `normalized_name`** (improving the normalizer would invalidate every
+  historical hash). `dedupe_seq` numbers identical rows within one import file.
+- `account_id` is chosen **per import file** (`--account` CLI flag), never derived from a row — no
+  bank export carries a pocket/sub-account marker.
+- Every internal-transfer category is `type = 'transfer'` (SAVINGS, INVESTING, BALU, C24 pockets).
+- `category_confirmed_at IS NULL` means "the app guessed, you haven't looked" — orthogonal to
+  `category_source`.
+- No `Uncategorized` category row; `category_id IS NULL` is uncategorized.
