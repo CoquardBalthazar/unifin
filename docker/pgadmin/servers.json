@@ -1,0 +1,24 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "Unifin — dev",
+      "Group": "Local (Docker)",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "db-unifin",
+      "Username": "u-unifin",
+      "SSLMode": "prefer",
+      "Comment": "Host is the Compose service name — pgAdmin is on the internal network."
+    },
+    "2": {
+      "Name": "Unifin — test",
+      "Group": "Local (Docker)",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "db-unifin-test",
+      "Username": "u-unifin",
+      "SSLMode": "prefer",
+      "Comment": "Truncated on every npm test. Never put real data here."
+    }
+  }
+}

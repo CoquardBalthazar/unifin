@@ -1,9 +1,8 @@
 ﻿Transaktionstyp,Buchungsdatum,Karteneinsatz,Betrag,Zahlungsempfänger,IBAN,BIC,Verwendungszweck,Beschreibung,Kontonummer,Kontoname,Kategorie,Unterkategorie,Bargeldabhebung
+Kartenzahlung,07.03.2026,06.03.2026 20:15,"-12,40 €",Sample Bäckerei,,,,SAMPLE BAECKEREI,0000000000,C24 Smartkonto,Lebensmittel,Bäckerei,
+Online-Kartenzahlung,06.03.2026,06.03.2026 11:02,"-9,99 €",Sample Streaming,,,,SAMPLE STREAMING,0000000000,C24 Smartkonto,Freizeit & Unterhaltung,Digitale Produkte & Dienste,
+Zinszahlung,05.03.2026,,"1,87 €",C24 Bank,,,ZINSEN 02/2026,,0000000000,C24 Smartkonto,Einkommen,Kapitalerträge,
 Kartenzahlung,04.03.2026,03.03.2026 19:42,"-37,99 €",Sample Supermarket,,,,SAMPLE SUPERMARKET,0000000000,C24 Smartkonto,Lebensmittel,Supermarkt,
 SEPA-Überweisung,04.03.2026,,"-120,00 €",Sample Landlord,,,SAMPLE REFERENZ MAXIMALE LAENGE SAMPLE REFERENZ MAXIMALE LAENGE SAMPLE REFERENZ MAXIMALE LAENGE,,0000000000,C24 Smartkonto,Wohnen & Haushalt,Miete,
 Kartenzahlung,03.03.2026,03.03.2026 12:05,"-8,95 €",Sample Drugstore,,,,SAMPLE DROGERIE,0000000000,C24 Smartkonto,Shopping,Drogerie,
 Kartenzahlung,03.03.2026,03.03.2026 12:05,"-8,95 €",Sample Drugstore,,,,SAMPLE DROGERIE,0000000000,C24 Smartkonto,Shopping,Drogerie,
-SEPA-Überweisung,02.03.2026,,"2200,00 €",Sample Employer SA,,,GEHALT 03/2026,,0000000000,C24 Smartkonto,Einkommen,Lohn/ Gehalt,
-SEPA-Überweisung,02.03.2026,,"-500,00 €",Sample Broker,,,SPARPLAN,,0000000000,C24 Smartkonto,Geldanlage,Kapitalanlage,
-Bargeldabhebung,01.03.2026,01.03.2026 08:11,"-20,00 €",Sample ATM,,,,,0000000000,C24 Smartkonto,Bargeld,Bargeld,Ja
-Pocket-Umbuchung,01.03.2026,,"-150,00 €",Sample Sparkonto Übertrag,,,,,0000000000,C24 Smartkonto,Umbuchung,Umbuchung,

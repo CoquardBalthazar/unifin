@@ -2879,6 +2879,47 @@ Current state of `data/sample/` — the files exist but are not usable as fixtur
 | Within-file duplicates | 26 across the BP exports | 0 | ✗ `dedupe_seq` untested |
 | Overlapping export | 464 shared rows across files | none | ✗ re-import path untested |
 
+###### Formats VERIFIED against real exports 2026-08-24 — this table wins over anything below
+
+Measured from `data/real/temp/20260824/` (gitignored). Earlier claims in this plan about C24
+line endings and the Trade Republic format were **wrong**; corrected here.
+
+| | v1 file | Encoding | Line ends | Delimiter | Decimal | Dates | Cols |
+|---|---|---|---|---|---|---|---|
+| **BP** | `BP_TSV_*.tsv` | ISO-8859-1 | **CRLF** | tab | `,` | `DD/MM/YYYY` | 3 |
+| **C24** | `C24_*_Transaktionen.csv` | UTF-8 **+ BOM** | **LF** ← *not CRLF* | `,` | `,` | `DD.MM.YYYY` | **14** |
+| **TR** | `TR_transactions_*.csv` | UTF-8, no BOM | **LF** | `,`, **every field quoted** | `.` (6 dp) | ISO `YYYY-MM-DD` | 23 |
+
+**BP specifics**
+- Header block is exactly 7 lines; padding is verbatim and must not be tidied:
+  `Compte tenu en··`, `Date············`, `Solde (EUROS)···` (`·` = space).
+- Account number shape `#######S###`.
+- Card rows pad the number with **16 spaces**: `CARTE NUMERO                111  ` (2 trailing).
+- Credits carry **no `+`** — bare `2200,00`. No footer row; the last line is a data row.
+- Body row = `date \t "libellé" \t amount`; only the libellé is quoted.
+
+**C24 specifics**
+- 14 columns: `Transaktionstyp, Buchungsdatum, Karteneinsatz, Betrag, Zahlungsempfänger, IBAN,
+  BIC, Verwendungszweck, Beschreibung, Kontonummer, Kontoname, Kategorie, Unterkategorie,
+  Bargeldabhebung`. The current sample has 10 — missing `Karteneinsatz`, `Kontonummer`,
+  `Kontoname`, `Bargeldabhebung`.
+- **`Betrag` carries the currency symbol**: `"-123,45 €"`. This breaks
+  [c24.py:34](backend/python/bank/c24.py#L34) — `.str.replace(",", ".").astype(float)` raises
+  `ValueError` on `-123.45 €`. Strip `€` and NBSP before the comma swap (4c).
+- `c24.py` also hardcodes `delimiter=","` and passes no `encoding` — see the backlog item below.
+- `Karteneinsatz` is a card-usage timestamp `DD.MM.YYYY HH:MM`, distinct from `Buchungsdatum`.
+
+**TR specifics**
+- 23 columns; `transaction_id` is a **UUID** → a real `external_id`, so dedupe needs no hash.
+- `mcc_code` is the last column and is populated (`4112` = rail).
+- Amounts are 6-decimal (`-15.100000`) — `f"{amount:.2f}"` at the hash boundary matters here.
+
+**Correction to a locked decision.** The 4a table states C24 rows carry no pocket marker. They
+do: **`Kontoname`** (`Food`, `C24 Smartkonto`). `--account` per import file stays the v1 design
+(simpler, and it is the DoD), but 4c must **assert every row in a file shares one `Kontoname`**
+and fail loudly on mismatch. Without that, importing the Food pocket under `--account girokonto`
+is silent and permanently poisons Phase 6 totals.
+
 ###### Required rows — `sample_bp.tsv`
 
 Header block is **exactly 7 lines** (5 meta + 1 blank + 1 column header), because `bp.py`
@@ -2903,17 +2944,20 @@ whole dedupe design.
 
 ###### `sample_c24.csv`
 
-UTF-8 **with BOM**, comma-delimited, amounts quoted German-style (`"-37,99"`). Must contain:
-a `Verwendungszweck` of ~95 chars (the real maximum — catches truncation), an
-`Einkommen / Lohn/ Gehalt` row, a `Geldanlage / Kapitalanlage` row, a `Bargeldabhebung`, one
-within-file duplicate pair, and one row with an **empty** `Verwendungszweck` (exercises the
-`rstrip("_")` in [c24.py:59](backend/python/bank/c24.py#L59)).
+UTF-8 **with BOM**, **LF** line endings, comma-delimited, all **14** columns in the order listed
+in the verified-formats table above. Amounts are quoted German-style **including the currency
+symbol**: `"-37,99 €"`. Must contain: a `Verwendungszweck` of ~95 chars (the real maximum —
+catches truncation), an `Einkommen / Lohn/ Gehalt` row, a `Geldanlage / Kapitalanlage` row, a
+`Bargeldabhebung`, one within-file duplicate pair, one row with an **empty** `Verwendungszweck`
+(exercises the `rstrip("_")` in [c24.py:59](backend/python/bank/c24.py#L59)), and a consistent
+`Kontoname` on every row (so the 4c per-file assertion has something to pass against).
 
 ###### `sample_tr.csv`
 
-Tab-delimited, `M/D/YYYY` dates, `.` decimal separator. Needs one row of each `type` the parser
-branches on: `CARD_TRANSACTION` (with an `mcc_code`), `TRANSFER_INSTANT_INBOUND`, `BUY` (with a
-non-zero `fee`), `CARD_ORDERING_FEE`. Used in 4d.
+**Comma**-delimited with **every field quoted**, **ISO `YYYY-MM-DD`** dates, `.` decimal with
+**6 decimal places**, LF, no BOM, 23 columns. Needs one row of each `type` the parser branches
+on: `CARD_TRANSACTION` (with an `mcc_code`), `TRANSFER_INSTANT_INBOUND`, `BUY` (with a non-zero
+`fee`), `CARD_ORDERING_FEE` — each with a distinct UUID `transaction_id`. Used in 4d.
 
 ###### How to build them
 
@@ -2930,9 +2974,18 @@ with open("data/sample/sample_bp.tsv", "w",
 
 with open("data/sample/sample_c24.csv", "w",
           encoding="utf-8-sig",    # ← "-sig" writes the BOM
-          newline="\r\n") as f:
+          newline="\n") as f:      # ← LF. C24 is NOT CRLF — verified 2026-08-24
+    ...
+
+with open("data/sample/sample_tr.csv", "w",
+          encoding="utf-8",        # ← no BOM here
+          newline="\n") as f:
     ...
 ```
+
+`newline=` is what Python translates every `"\n"` into on write. Left at the default (`None`) it
+uses `os.linesep` — LF on WSL — which silently produces the wrong BP fixture. Setting it
+explicitly is what makes the bytes reproducible in CI.
 
 **DoD 4a.3**
 ```bash
@@ -2953,7 +3006,171 @@ head -c 3 data/sample/sample_c24.csv | xxd
 triplicate rows in six months thinking they are a mistake.
 
 **4a done when:** `npm test` is green, connected to `db-unifin-test`, the dev-DB canary row
-survives a full test run, and `file data/sample/*` reports the right encodings.
+survives a full test run, and `file --mime-encoding data/sample/*` reports the right encodings
+(`iso-8859-1` / `utf-8` / `utf-8`). Use `--mime-encoding`, not bare `file`: `file` runs a
+structural test first and reports `CSV text` for a well-formed CSV without naming the encoding.
+
+---
+
+#### Phase 4a-bis — Working environment (added 2026-08-24)
+*Not a build phase. Two housekeeping items that make 4b–4e less painful, done between 4a and 4b.*
+
+##### pgAdmin as an opt-in Compose service
+
+A GUI on the database pays for itself the moment migrations exist: inspecting a foreign key or a
+`dedupe_seq` distribution in a table view beats writing `psql` one-liners. It is added **now**
+rather than later because the same tool connects to Railway in 8a — one tree holding dev, test
+and prod.
+
+`docker/pgadmin/servers.json` (committed, **no passwords**) pre-registers `db-unifin` and
+`db-unifin-test`. In `docker-compose.yml`:
+
+```yaml
+  pgadmin:
+    image: dpage/pgadmin4:8
+    profiles: ["tools"]          # skipped by a bare `docker compose up`
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com         # see gotcha 1 below
+      PGADMIN_DEFAULT_PASSWORD: pw-unifin
+      PGADMIN_CONFIG_SERVER_MODE: "False"              # desktop mode, no login screen
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./docker/pgadmin/servers.json:/pgadmin4/servers.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+```
+
+```bash
+docker compose --profile tools up -d pgadmin    # http://localhost:5050
+docker compose --profile tools stop pgadmin
+```
+
+- **`profiles:`** — a service in a profile is skipped unless the profile is named. Normal startup
+  stays two containers; the GUI is opt-in. This is the general pattern for optional dev tooling.
+- **`pgadmin_data`** — pgAdmin's own config DB (saved passwords, query history, layout). Without
+  it, every `down` loses the registrations.
+- **`servers.json` imports only on first boot**, while `pgadmin_data` is empty — the same rule as
+  `/docker-entrypoint-initdb.d` and `postgres_data`. To re-import after editing:
+  `docker volume rm unifin_pgadmin_data` (**not** `down -v`, which wipes the database too).
+- **Inside pgAdmin the host is `postgres`**, not `localhost` — it is a container on the Compose
+  network. A host GUI (DBeaver, SQLTools) uses `localhost:5432`. Same DB, two names.
+
+###### Gotchas hit while setting this up
+
+**1. `PGADMIN_DEFAULT_EMAIL` must pass pgAdmin's email validator.** `dev@unifin.local` is
+*rejected* — `.local` is a reserved TLD — and the container exits on boot:
+
+```
+'dev@unifin.local' does not appear to be a valid email address.
+```
+
+The address is never used in desktop mode, but it is still validated. Use a real-looking domain.
+
+**2. `restart: unless-stopped` turns a fatal config error into an infinite retry.** The symptom is
+not an error, it is *nothing*: no port, no response, no `Listening at:` line. The tell is
+`docker compose ps`:
+
+```
+pgadmin    Restarting (1) 8 seconds ago      ← empty PORTS column
+```
+
+**An empty `PORTS` column always means the container never reached running state**, whatever the
+status text says — the process died before it could bind, so Docker never published `5050`. Same
+family as the Phase 3c crash-loop, but the opposite surface: there the port stayed *held* by a
+stale `docker-proxy`, here it was never published at all. Either way the answer is
+`docker compose logs <service>` — the error is always there, the restart policy just keeps it out
+of the status line.
+
+**3. Env vars are baked in at container-create time.** After fixing one, `restart` reuses the
+broken container. Recreate:
+
+```bash
+docker compose --profile tools up -d --force-recreate pgadmin
+```
+
+Same root cause as the stale bind mount and the `volumes:` edit that did nothing — **any**
+change to a container's definition needs a recreate, not a restart.
+
+###### Connecting, step by step
+
+```bash
+docker compose --profile tools up -d pgadmin      # ~400 MB pull on first run
+docker compose --profile tools logs -f pgadmin    # wait for "Listening at: http://[::]:80"
+docker compose --profile tools ps                 # PORTS must show 0.0.0.0:5050->80/tcp
+```
+
+Then <http://localhost:5050> — no login screen in desktop mode. Left panel →
+**Local (Docker)** → **Unifin — dev** → password `pw-unifin`, tick **Save Password** (it persists
+in `pgadmin_data`).
+
+| You want | Path |
+|---|---|
+| Table contents | Databases → db-unifin → Schemas → public → Tables → right-click → *View/Edit Data → All Rows* |
+| Run SQL | Tools → **Query Tool** (`Alt+Shift+Q`) |
+| Inspect a foreign key | Tables → `transactions` → Constraints |
+| Confirm test isolation | switch to **Unifin — test** — same schema, no real rows |
+
+If the server tree is empty, `servers.json` did not import (first-boot only). Targeted reset:
+
+```bash
+docker compose --profile tools down pgadmin
+docker volume rm unifin_pgadmin_data      # ONLY pgAdmin's config volume
+docker compose --profile tools up -d pgadmin
+```
+
+**Never `docker compose down -v` to fix this** — that also deletes `postgres_data` and wipes the
+database.
+
+**For Railway (8a)** — register prod through the UI, never in `servers.json` (that file is
+committed): host/port/user/password from Railway's variables tab, **`SSL mode: require`** — not
+`prefer`, which silently falls back to plaintext over the public internet. If you ever work on an
+untrusted network, change the port binding to `"127.0.0.1:5050:80"`: a desktop-mode pgAdmin
+holding a saved production password is an unauthenticated admin console.
+
+##### `data/real/` layout — decided 2026-08-24
+
+`data/real/` is gitignored and exists only on the dev machine. It has exactly one job: **be the
+archive that can rebuild the database from scratch.** BP cannot re-export anything older than
+90 days, so losing this directory is unrecoverable.
+
+Organised by **export session**, not by bank — one export produces files for every account at the
+same moment, and keeping them together preserves the "as of date X, this is what all my accounts
+looked like" snapshot that reconciliation depends on. The existing filenames already carry the
+export date.
+
+```
+data/real/
+├── exports/                    # AS RECEIVED. Never edited, never renamed.
+│   ├── 20241204/
+│   ├── 20250418/
+│   ├── 20260824/               # BP_TSV, BP_PDF, C24_*, TR_*
+│   └── …
+├── derived/                    # GENERATED here, not received from a bank
+│   └── BP_MANUAL_2025-05_2026-05.tsv
+└── inbox/                      # ETL_INPUT_DIR — what is being imported right now
+```
+
+- **`exports/` is immutable evidence.** If a parser bug corrupts an import, re-run against the
+  original bytes. Never edit in place.
+- **`derived/` is separate** because a hand-transcribed file can never byte-match a real export —
+  a standing reminder of the 2026-05-25 cut rule (see the BP 90-day gap note in 4e).
+- **`inbox/` is staging**, so `ETL_INPUT_DIR` points at one stable path instead of changing per
+  session.
+- **No per-account subdirectories for C24 pockets.** The `--account` flag plus the `Kontoname`
+  assertion in 4c is the guard; a directory convention would be a second source of truth that
+  drifts silently.
+
+Fold the existing `bp/`, `c24/`, `temp/` into `exports/<date>/` before 4e, so the import loop is
+one `for f in exports/*/BP_TSV_*.tsv`.
+
+**Reminder — uploaded files are never stored.** The Phase 7 upload path writes to
+`os.tmpdir()/<uuid>`, spawns the parser, and deletes the file in a `finally`. Only the parsed rows
+and one `imports` row (with `filename` as a *display string*) persist. `data/real/` is the CLI
+path only; the two never share a directory.
 
 ---
 
@@ -3412,6 +3629,14 @@ export async function up(knex: Knex): Promise<void> {
     // --- internal transfers ---
     table.integer("transfer_pair_id").references("id").inTable("transactions");
 
+    // --- soft delete (added 2026-08-24) ---
+    // A hard DELETE is self-undoing: removing the row frees its
+    // (dedupe_hash, dedupe_seq), so the next import of any overlapping
+    // export re-inserts it. The row must stay and hold its hash.
+    // Every Phase 6 aggregate filters `WHERE ignored_at IS NULL`.
+    table.timestamp("ignored_at");   // null = counts toward totals
+    table.string("ignored_reason");  // 'duplicate' | 'bank_error' | 'manual'
+
     table.index("normalized_name");
     table.index("date");
     table.index("category_id");
@@ -3427,6 +3652,7 @@ export async function down(knex: Knex): Promise<void> {
       "category_id", "category_source", "category_confidence", "category_confirmed_at",
       "normalized_name", "external_id", "counterparty",
       "dedupe_hash", "dedupe_seq", "transfer_pair_id",
+      "ignored_at", "ignored_reason",
     );
   });
 }
@@ -3473,6 +3699,44 @@ and one you don't.
 **Trade Republic is the exception** (4d): its export ships a native stable `transaction_id` UUID.
 For TR, `dedupe_hash = transaction_id` and `dedupe_seq` stays `0` forever. Better than any hash
 you can compute, and it doubles as an independent check on the sha256 path.
+
+###### The pending-date problem — measured 2026-08-24, and why we are NOT solving it
+
+*The concern:* a transaction appears in one export dated the day of export (a pending
+placeholder), then in a later export with its real settlement date. The date is in the hash, so
+the two rows hash differently and both insert. A silent double-count.
+
+*The measurement.* Across all 11 real BP exports and all 3 C24 exports, every pair compared: the
+same `(libellé, amount)` appearing with a date shifted 1–10 days between two exports occurs
+**zero times**. (A first pass flagged 9 hits, all `COTISATION TRIMESTRIELLE` — the quarterly
+account fee, same amount three months apart. Genuine recurring charges, not date shifts.)
+Conclusion: **BP and C24 export only booked transactions.** The pending placeholder is in the
+bank's app UI, not the file. Trade Republic is untested — only one export exists, so no pair.
+
+*Why fuzzy matching at import is rejected:*
+- It breaks the `BEER KING ×3` case. A 4th genuine beer two days later at the same bar is
+  indistinguishable from a date-shifted duplicate. **A missing real transaction is worse than a
+  visible duplicate** — the duplicate you can see and fix, the missing one makes totals wrong
+  forever, silently.
+- It destroys determinism. "Same file twice → `inserted_count = 0`" stops being provable once the
+  result depends on existing table contents, which makes 4c's DoD meaningless.
+- Removing `date` from the hash is worse still: a €13 beer in March and one in June then collide.
+
+*What we do instead* — decided 2026-08-24:
+1. **Prefer a bank-supplied stable ID.** TR's UUID now (4d); BP OFX's `FITID` in Phase 11. Where
+   the bank provides identity, the problem cannot occur by construction.
+2. **`ignored_at` / `ignored_reason` in M4** (above). Needed regardless — a hard delete frees the
+   `(dedupe_hash, dedupe_seq)` pair and the row returns on the next overlapping import.
+3. **Report, never act.** The 4c import summary runs one near-match query over the rows just
+   inserted (same `account_id`, same `amount`, same `normalized_name`, different `date`, ≤7 days
+   apart) and prints *"N possible duplicates — review"*. Note this query reads
+   `normalized_name` — legitimate here precisely because it is computed live, unlike the hash.
+4. **Re-measure in 4e.** The historical exports are 2023–2025 and the 2026-08-24 export does not
+   overlap them. Two overlapping *2026* exports would settle current-day behaviour; re-run
+   `scripts/check_date_shift.py` then.
+
+*Do not overload category for this.* "This row is wrong" and "this row is uncategorized" are
+orthogonal — the same reason `category_confirmed_at` is orthogonal to `category_source`.
 
 ###### The other columns
 
@@ -4004,6 +4268,38 @@ FROM transactions t JOIN accounts a ON a.id = t.account_id
 GROUP BY a.label ORDER BY a.label;
 ```
 
+##### The BP 90-day gap — decided 2026-08-24
+
+BP's CSV/TSV export reaches back only **90 days**. As of 2026-08-24 that covers
+**2026-05-26 → 2026-08-24**, and the historical TSVs in `data/real/bp/tsv/` stop at 2025-04.
+So roughly **2025-05 → 2026-05 has no machine-readable BP export** — including five months of
+2026, which is exactly what makes Phase 6's yearly totals wrong.
+
+C24 and TR are unaffected: both export the full 2026 range in one file.
+
+**Fix for v1: a one-time manual conversion of the PDF statements** (option 2), with a real PDF
+parser deferred to Phase 12.
+
+- [ ] Transcribe the gap period from the PDF statements into **BP TSV format** — reuse
+      `write_bp()` in `scripts/make_fixtures.py` rather than hand-typing a file, so the encoding,
+      CRLF and 7-line header are right by construction. It then imports through the existing
+      `bp.py` path with **zero new code**.
+- [ ] Name it distinctly, e.g. `BP_MANUAL_2025-05_2026-05.tsv`, so `transactions.source_file`
+      makes these rows identifiable later.
+- [ ] **Cut the manual file at 2026-05-25 — one day before the real TSV coverage begins.**
+      This is not cosmetic. `dedupe_hash` reads `raw_name`; a hand-transcribed payee string will
+      not byte-match what BP's exporter would have produced, so any overlap between the manual
+      file and a real export inserts the same transaction twice with different hashes. Since BP
+      *cannot* export the gap period anyway, a clean cut makes overlap structurally impossible.
+- [ ] If a duplicate does slip through, resolve it with `ignored_at`, never `DELETE`
+      (see the M4 note — a hard delete frees the hash and the row returns on the next import).
+
+**When is this data actually needed?** Not for 4a–4d: the sample fixtures cover all parser and
+dedupe work. The ETL is incremental, so the gap file can be imported at any later point as just
+another run — no rework. The deadline is **4e's reconciliation** and, hard, **Phase 6**, where a
+missing five months makes the Overview lie. Best time to do the transcription is *during* 4b/4c:
+it is manual work with no code dependency, so it parallelises with the build.
+
 **⚠️ Before the first real import:** `git status` and confirm nothing under `data/real/` is staged.
 The repo is public.
 
@@ -4220,6 +4516,69 @@ the AI only sees what the rules missed.*
 - [ ] Cost guard: cap the rows sent per run, log token usage
 
 Cost at this data volume is a few cents, one-time. Not a factor in the design.
+
+---
+
+### Phase 11 — Multiple export formats per bank
+**Layer:** ETL · **Stack:** Python · **Estimate:** 2 sessions · *Post-launch*
+
+*v1 supports exactly one file format per bank (BP `.tsv`, C24 comma `.csv`, TR `.csv`). Every
+bank offers more, and the format you happen to click in the export dialog should not decide
+whether the import works.*
+
+Inventory taken 2026-08-24 from `data/real/temp/20260824/`:
+
+| Bank | v1 | Also available | Notes |
+|---|---|---|---|
+| BP | `.tsv` | `.csv` (ISO-8859-1, CRLF), `.ofx` | OFX is a structured XML-ish standard — arguably a *better* source than the TSV, and it carries an `FITID` (a real `external_id`, so no hashing) |
+| C24 | comma `.csv` | semicolon `.csv`, `.xlsx` | Same 14 columns, delimiter differs. `.xlsx` needs `openpyxl` |
+| PayPal | — | `.CSV`, `.PDF` | Stays an *enricher*, never an account — see the 4e note |
+
+Design, in order of value:
+
+- [ ] **Sniff the format, don't ask.** One `detect_format(path)` returning `(bank, variant)` from
+      the byte signature — BOM present, first-line delimiter counts, header names — rather than a
+      `--format` flag. The filename is not evidence; the user renames files.
+- [ ] **Delimiter detection for C24** — `csv.Sniffer` on the header line, or simply count `,` vs
+      `;`. This is the cheapest win: same parser, one parameter.
+- [ ] **`c24.py` hardening (some of this lands early, in 4c)** — pass `encoding="utf-8-sig"`
+      explicitly, strip `€`/NBSP before the comma→dot swap, stop hardcoding `delimiter=","`.
+- [ ] **BP OFX parser** — if `FITID` proves stable across exports, OFX becomes the preferred BP
+      source and `dedupe_hash` is bypassed entirely for that bank. Verify stability against two
+      overlapping exports **before** trusting it.
+- [ ] **One fixture per variant**, generated by `scripts/make_fixtures.py`. The generator already
+      being the single source of format truth is what makes this cheap to add.
+- [ ] Dedupe must hold **across formats**: the same transaction imported once as `.tsv` and once
+      as `.csv` has to collide. That is a real assertion, and it constrains what may go into the
+      hash — anything format-specific (quoting, padding, column order) must be normalized out
+      *before* hashing, while still not touching `raw_name`.
+
+The last bullet is the one with teeth. Everything else is parser plumbing.
+
+---
+
+### Phase 12 — BP PDF statement parser
+**Layer:** ETL · **Stack:** Python (`pdfplumber`) · **Estimate:** 1–1.5 sessions · *Post-launch*
+
+*Replaces the one-time manual transcription from 4e with something repeatable. BP's CSV/TSV
+export only reaches back 90 days; the PDF statements are the only machine-readable source for
+anything older, and the same gap reopens every time more than 90 days pass between exports.*
+
+- [ ] `pdfplumber` table extraction per statement page; BP statements are a fixed-layout table,
+      not free text, so `extract_table()` should carry most of it.
+- [ ] **Emit BP TSV, do not insert directly.** The parser's output goes through the existing
+      `bp.py` → `db_insert.py` path, so dedupe, categorization and `imports` bookkeeping are
+      unchanged and the new code has exactly one job.
+- [ ] The hard part is `raw_name` fidelity: for a PDF-sourced row to dedupe against a TSV-sourced
+      one, the payee string must reproduce the exporter's spacing byte-for-byte — including the
+      16-space `CARTE NUMERO` padding. Verify against a period covered by **both** a PDF and a
+      TSV export; that overlap is the only real test.
+- [ ] If byte-fidelity proves unachievable, the fallback is to treat PDF-sourced rows as their own
+      non-overlapping date range (the 4e cut-date rule), which is what v1 does anyway.
+- [ ] Statement `Solde` / `Date` per PDF feed `imports.statement_balance` / `statement_date` —
+      free reconciliation anchors that the TSV export also provides.
+
+Worth doing only once the app is live and the manual fill has proven annoying twice.
 
 ---
 

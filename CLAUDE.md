@@ -162,7 +162,8 @@ transactions    — id, account_id, import_id, date, raw_name, normalized_name,
                   counterparty, external_id, amount, flow,
                   category_id (nullable), category_source, category_confidence,
                   category_confirmed_at, dedupe_hash, dedupe_seq,
-                  transfer_pair_id, source_file, imported_at
+                  transfer_pair_id, ignored_at, ignored_reason,
+                  source_file, imported_at
 categories      — id, label, type (income/expense/transfer), visible
 category_rules  — id, bank, match_field, match_type, pattern,
                   category_id, priority, confidence
@@ -176,8 +177,13 @@ Non-obvious invariants — break these and Phase 6's totals lie:
 - `UNIQUE(dedupe_hash, dedupe_seq)` is the duplicate-rejection mechanism. `dedupe_hash` is computed
   from **`raw_name`, never `normalized_name`** (improving the normalizer would invalidate every
   historical hash). `dedupe_seq` numbers identical rows within one import file.
-- `account_id` is chosen **per import file** (`--account` CLI flag), never derived from a row — no
-  bank export carries a pocket/sub-account marker.
+- **Never hard-delete a transaction.** `DELETE` frees its `(dedupe_hash, dedupe_seq)`, so the next
+  import of any overlapping export re-inserts it. Removal is `ignored_at = now()`; every aggregate
+  filters `WHERE ignored_at IS NULL`. `ignored_at` is orthogonal to the `category_*` columns.
+- `account_id` is chosen **per import file** (`--account` CLI flag), never derived from a row.
+  C24 *does* ship a `Kontoname` column (corrected 2026-08-24) — use it as a **guard, not a source**:
+  assert every row in a file shares one `Kontoname` and fail loudly on mismatch. Importing the
+  Food pocket under `--account girokonto` is otherwise silent and poisons Phase 6 permanently.
 - Every internal-transfer category is `type = 'transfer'` (SAVINGS, INVESTING, BALU, C24 pockets).
 - `category_confirmed_at IS NULL` means "the app guessed, you haven't looked" — orthogonal to
   `category_source`.

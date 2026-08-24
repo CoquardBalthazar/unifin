@@ -31,5 +31,33 @@ services:
       - ./backend:/app
       - /app/node_modules
 
+  # Database GUI. In a profile, so a bare `docker compose up` skips it:
+  #   docker compose --profile tools up -d pgadmin   → http://localhost:5050
+  #   docker compose --profile tools stop pgadmin
+  pgadmin:
+    image: dpage/pgadmin4:8
+    profiles: ["tools"]
+    restart: unless-stopped
+    environment:
+      # Must pass pgAdmin's email validator — a `.local` TLD is rejected and
+      # the container crash-loops on boot. Never actually used in desktop mode.
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: pw-unifin
+      # Desktop mode: no pgAdmin user management, no master-password prompt.
+      # Fine for a local single-user tool; never do this on a public host.
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      # Pre-registers the two connections. Imported ONLY on first boot,
+      # while pgadmin_data is empty — same rule as /docker-entrypoint-initdb.d.
+      - ./docker/pgadmin/servers.json:/pgadmin4/servers.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   postgres_data:
+  pgadmin_data:
