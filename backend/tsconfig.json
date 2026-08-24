@@ -1,15 +1,22 @@
 {
-  // Without an explicit `include`, tsc defaults to `**/*` and picks up
-  // knexfile.ts, which lives outside `rootDir` (./src) → TS6059.
-  // knexfile.ts is config run by the knex CLI through tsx, not app code.
-  "include": ["src"],
+  // This is the TYPECHECK config — the one VS Code picks up (it looks for
+  // the nearest file literally named `tsconfig.json`, so tests must be in
+  // here or they belong to no project and report TS6059).
+  // Emitting `dist/` is a separate job: see tsconfig.build.json.
+  //
+  // Without an explicit `include`, tsc defaults to `**/*` and would also
+  // pull in `dist/`.
+  "include": ["src", "test", "knexfile.ts", "vitest.config.ts"],
   "exclude": ["node_modules", "dist"],
 
   // Visit https://aka.ms/tsconfig to read more about this file
   "compilerOptions": {
     // File Layout
-    "rootDir": "./src",
+    // rootDir spans the whole package so `test/` is legal; harmless
+    // because noEmit means nothing is ever written.
+    "rootDir": ".",
     "outDir": "./dist",
+    "noEmit": true,
 
     // Environment Settings
     // See also https://aka.ms/tsconfig/module

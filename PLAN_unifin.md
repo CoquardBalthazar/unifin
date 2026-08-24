@@ -2870,7 +2870,6 @@ Two different things, do not conflate them:
 
 - **`data/sample/*`** — fake bank *export files*, fed to the Python ETL. Test the **parser**.
 - **`backend/test/*`** — rows inserted straight into Postgres. Test the **API**.
-
 Current state of `data/sample/` — the files exist but are not usable as fixtures:
 
 | | Real export | `data/sample/` today | |

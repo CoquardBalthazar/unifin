@@ -1,0 +1,12 @@
+{
+  // The BUILD config — emits dist/ for the Phase 8a deploy.
+  // Inherits every strictness flag from tsconfig.json and overrides only
+  // the three keys that differ: what to compile, where the tree is rooted,
+  // and the fact that this one actually writes files.
+  "extends": "./tsconfig.json",
+  "include": ["src"],
+  "compilerOptions": {
+    "rootDir": "./src",
+    "noEmit": false
+  }
+}

@@ -3,6 +3,8 @@ import jwt from "jsonwebtoken";
 
 import { app } from "../index.js";
 import { db } from "../db/knex.js";
+import { truncateTransactional } from "../../test/helpers/db.js";
+
 import {
   describe,
   test,
@@ -28,14 +30,8 @@ beforeAll(() => {
   bearer = `Bearer ${token}`;
 });
 
-// NOTES : Change the db to test-db when in production
-// Practical implication worth flagging clearly: because this
-// hits your real dev database, running the test suite wipes
-// out any real data you've manually inserted
 beforeEach(async () => {
-  // TRUNCATE TABLE transactions. Deletes every row in the table, instantly, and resets the
-  // auto-increment counter (so the next inserted row gets id = 1
-  await db("transactions").truncate(); // clean slate per test — no leftover rows between tests
+  await truncateTransactional(); // clean slate per test — no leftover rows between tests
 });
 
 afterAll(async () => {

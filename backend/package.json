@@ -6,8 +6,10 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
-},
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
